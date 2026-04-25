@@ -769,7 +769,7 @@ def main():
         ckpt_dir_template=args.ckpt_dir_template,
     )
     os.makedirs(config.system.checkpoint_dir, exist_ok=True)
-    if args.resume:
+    if args.resume and not getattr(config.resume, "checkpoint_path", None):
         newest = Path(config.system.checkpoint_dir) / "newest"
         steps = sorted(Path(config.system.checkpoint_dir).glob("checkpoint_step_*"), key=lambda p: int(re.search(r"step_(\d+)", p.name).group(1)))
         resume_path = newest if (newest / "latest_step.txt").exists() else (steps[-1] if steps else None)
