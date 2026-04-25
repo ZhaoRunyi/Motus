@@ -725,6 +725,7 @@ def main():
                        help="Logging backends to use")
     parser.add_argument("--wandb_project", type=str, default=None, help="Override WandB project name")
     parser.add_argument("--run_name", type=str, default=None, help="Override run name")
+    parser.add_argument("--resume", action="store_true", help="Resume from newest or latest checkpoint in resolved ckpt dir")
     
     # DeepSpeed settings
     parser.add_argument("--deepspeed", type=str, default=None, help="Path to DeepSpeed config file")
@@ -767,8 +768,13 @@ def main():
         run_name=run_name,
         ckpt_dir_template=args.ckpt_dir_template,
     )
-
     os.makedirs(config.system.checkpoint_dir, exist_ok=True)
+    if args.resume:
+        newest = Path(config.system.checkpoint_dir) / "newest"
+        steps = sorted(Path(config.system.checkpoint_dir).glob("checkpoint_step_*"), key=lambda p: int(re.search(r"step_(\d+)", p.name).group(1)))
+        resume_path = newest if (newest / "latest_step.txt").exists() else (steps[-1] if steps else None)
+        if resume_path is None: raise FileNotFoundError(f"No checkpoint found under {config.system.checkpoint_dir} for --resume")
+        config.resume.checkpoint_path, config.resume.reset_scheduler, config.model.load_pretrained_backbones = str(resume_path), False, False
 
     # Initialize Accelerator with DeepSpeed (if provided)
     accelerator_project_config = ProjectConfiguration(total_limit=20)
