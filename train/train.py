@@ -556,7 +556,7 @@ class UniDiffuserTrainer:
                         'step_time': step_time,
                         'epoch': epoch,
                         'global_step': self.global_step,
-                        })
+                        }, step=self.global_step)
                 
                 # Log to TensorBoard
                 if self.tb_writer is not None:
@@ -773,8 +773,8 @@ def main():
         newest = Path(config.system.checkpoint_dir) / "newest"
         steps = sorted(Path(config.system.checkpoint_dir).glob("checkpoint_step_*"), key=lambda p: int(re.search(r"step_(\d+)", p.name).group(1)))
         resume_path = newest if (newest / "latest_step.txt").exists() else (steps[-1] if steps else None)
-        if resume_path is None: raise FileNotFoundError(f"No checkpoint found under {config.system.checkpoint_dir} for --resume")
-        config.resume.checkpoint_path, config.resume.reset_scheduler, config.model.load_pretrained_backbones = str(resume_path), False, False
+        if resume_path is None: logger.warning(f"No checkpoint found under {config.system.checkpoint_dir} for --resume; starting from step 0")
+        else: config.resume.checkpoint_path, config.resume.reset_scheduler, config.model.load_pretrained_backbones = str(resume_path), False, False
 
     # Initialize Accelerator with DeepSpeed (if provided)
     accelerator_project_config = ProjectConfiguration(total_limit=20)
@@ -809,11 +809,7 @@ def main():
     
     # Initialize WandB
     if rank == 0 and "wandb" in report_to:
-        wandb.init(
-            project=config.logging.wandb_project,
-            config=OmegaConf.to_container(config, resolve=True),
-            name=run_name,
-        )
+        run_id_path = Path(config.system.checkpoint_dir) / "wandb_id.txt"; wandb.init(project=config.logging.wandb_project, config=OmegaConf.to_container(config, resolve=True), name=run_name, id=run_id_path.read_text(encoding="utf-8").strip() if getattr(config.resume, "checkpoint_path", None) and run_id_path.exists() else None, resume="must" if getattr(config.resume, "checkpoint_path", None) and run_id_path.exists() else None); run_id_path.write_text(wandb.run.id, encoding="utf-8")
     
     try:
         # Create model and optimizer
