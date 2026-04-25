@@ -1,0 +1,30 @@
+# RobotWin click_bell -> Motus conversion config.
+#
+# Expected prepared source layout:
+#   /workspace/data/motus_robotwin_click_bell_converter_input/
+#   └── clean/
+#       └── click_bell/
+#           ├── data/episode*.hdf5
+#           └── instructions/episode*.json
+#
+# If randomized data is also downloaded/extracted, add:
+#   randomized/click_bell -> .../aloha-agilex_randomized_500
+
+source_root: "/workspace/data/motus_robotwin_click_bell_converter_input"
+target_root: "/workspace/data/motus_robotwin2_click_bell_preprocessed"
+
+fps: 30
+target_width: 320
+target_height: 360
+
+max_workers: 16
+skip_existing: true
+
+enable_t5_embeddings: true
+wan_repo_path: "/workspace/ckpts/Wan2.2-TI2V-5B"
+t5_max_length: 512
+cuda_devices: ["0"]
+
+log_level: "INFO"
+save_debug_frames: false
+debug_output_dir: "/tmp/robotwin_click_bell_debug"

@@ -3,6 +3,7 @@
 
 import os
 import re
+import shutil
 import sys
 import argparse
 import json
@@ -83,6 +84,44 @@ def load_config(config_path: str) -> OmegaConf:
     
     return config
 
+
+def normalize_report_to(report_to: Any) -> list[str]:
+    """Normalize config/CLI tracker selection to the exact backends we should use."""
+    if report_to == "all":
+        return ["wandb", "tensorboard"]
+    if report_to == "none" or report_to is None:
+        return []
+    if isinstance(report_to, str):
+        return [report_to]
+    if isinstance(report_to, (list, tuple)):
+        return [str(item) for item in report_to]
+    return [str(report_to)]
+
+
+def resolve_ckpt_dir(
+    ckpt_dir: str,
+    config_name: str,
+    run_name: str,
+    ckpt_dir_template: str | None = None,
+) -> str:
+    """Resolve the final ckpt directory from a template or the default layout."""
+    if ckpt_dir_template is None:
+        return os.path.join(ckpt_dir, config_name, run_name)
+
+    template_values = {
+        "ckpt_dir": ckpt_dir,
+        "config_name": config_name,
+        "run_name": run_name,
+    }
+
+    try:
+        return ckpt_dir_template.format(**template_values)
+    except KeyError as error:
+        raise ValueError(
+            "Unknown placeholder in --ckpt_dir_template. "
+            "Supported placeholders: {ckpt_dir}, {config_name}, {run_name}."
+        ) from error
+
 def setup_distributed():
     """Setup distributed training."""
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
@@ -96,6 +135,104 @@ def setup_distributed():
         return rank, world_size, local_rank
     else:
         return 0, 1, 0
+
+def save_state_dict_with_atomic_replace(
+    state_dict: Dict[str, Any],
+    output_path: str,
+    zipfile_serialization: bool,
+    rank: int,
+    max_retries: int = 3,
+    retry_sleep_seconds: float = 2.0,
+) -> None:
+    output_path_obj = Path(output_path)
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    temp_path_obj = output_path_obj.with_name(f".{output_path_obj.name}.rank{rank}.tmp")
+
+    def fsync_parent_directory(path_obj: Path) -> None:
+        directory_fd = os.open(str(path_obj.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            if temp_path_obj.exists():
+                temp_path_obj.unlink()
+
+            with open(temp_path_obj, "wb") as file_obj:
+                torch.save(
+                    state_dict,
+                    file_obj,
+                    _use_new_zipfile_serialization=zipfile_serialization,
+                )
+                file_obj.flush()
+                os.fsync(file_obj.fileno())
+
+            os.replace(temp_path_obj, output_path_obj)
+            fsync_parent_directory(output_path_obj)
+            return
+
+        except Exception as error:
+            last_error = error
+            logger.warning(
+                "Checkpoint save attempt %s/%s failed on rank %s for %s: %s",
+                attempt,
+                max_retries,
+                rank,
+                output_path,
+                error,
+            )
+            try:
+                if temp_path_obj.exists():
+                    temp_path_obj.unlink()
+            except OSError:
+                pass
+
+            if attempt < max_retries:
+                time.sleep(retry_sleep_seconds * attempt)
+
+    raise last_error
+
+
+def patch_deepspeed_checkpoint_engine_for_workspace_fs(model: Any, rank: int) -> None:
+    checkpoint_engine = getattr(model, "checkpoint_engine", None)
+    if checkpoint_engine is None:
+        logger.info("No checkpoint_engine found on prepared model; skip checkpoint save patch.")
+        return
+
+    engine_name = checkpoint_engine.__class__.__name__
+    if engine_name != "TorchCheckpointEngine":
+        logger.info(
+            "Checkpoint engine %s is not TorchCheckpointEngine; skip checkpoint save patch.",
+            engine_name,
+        )
+        return
+
+    if getattr(checkpoint_engine, "_workspace_atomic_save_patch_applied", False):
+        return
+
+    original_save = checkpoint_engine.save
+    zipfile_serialization = checkpoint_engine.zipfile_serialization
+
+    def patched_save(state_dict, path: str):
+        save_state_dict_with_atomic_replace(
+            state_dict=state_dict,
+            output_path=path,
+            zipfile_serialization=zipfile_serialization,
+            rank=rank,
+        )
+
+    checkpoint_engine._workspace_atomic_save_original = original_save
+    checkpoint_engine.save = patched_save
+    checkpoint_engine._workspace_atomic_save_patch_applied = True
+
+    logger.info(
+        "Patched TorchCheckpointEngine.save for workspace-safe atomic writes "
+        "(zipfile_serialization=%s)",
+        zipfile_serialization,
+    )
 
 class UniDiffuserTrainer:
     """Trainer class for Motus."""
@@ -113,6 +250,7 @@ class UniDiffuserTrainer:
         checkpoint_dir: str = "./checkpoints_stage4",
         log_interval: int = 100,
         save_interval: int = 1000,
+        newest_save_interval: int = 0,
         val_interval: int = 1000,
         report_to: str = "wandb",
         tb_writer: Optional[SummaryWriter] = None,
@@ -132,6 +270,7 @@ class UniDiffuserTrainer:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.log_interval = log_interval
         self.save_interval = save_interval
+        self.newest_save_interval = newest_save_interval
         self.val_interval = val_interval
         self.report_to = report_to
         self.tb_writer = tb_writer
@@ -149,9 +288,16 @@ class UniDiffuserTrainer:
         logger.info(f"Motus Trainer initialized on rank {rank}/{world_size}")
         logger.info(f"Logging backends: {report_to}")
 
-    def save_checkpoint(self, suffix: str = ""):
+    def save_checkpoint(self, checkpoint_name: Optional[str] = None):
         """Save complete training state using accelerator."""
-        checkpoint_dir = self.checkpoint_dir / f"checkpoint_step_{self.global_step}{suffix}"
+        if checkpoint_name is None:
+            checkpoint_dir = self.checkpoint_dir / f"checkpoint_step_{self.global_step}"
+        else:
+            checkpoint_dir = self.checkpoint_dir / checkpoint_name
+            self.accelerator.wait_for_everyone()
+            if self.rank == 0:
+                shutil.rmtree(checkpoint_dir, ignore_errors=True)
+            self.accelerator.wait_for_everyone()
         
         # Use accelerator to save complete training state
         # This saves model, optimizer, scheduler, dataloader, and RNG states
@@ -177,6 +323,11 @@ class UniDiffuserTrainer:
             logger.info(f"Wrote config.json to {checkpoint_dir}")
         except Exception as e:
             logger.warning(f"Failed to write config.json: {e}")
+        if checkpoint_name is not None and self.rank == 0:
+            try:
+                (checkpoint_dir / "latest_step.txt").write_text(str(self.global_step), encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Failed to write latest_step.txt: {e}")
     
     def load_checkpoint(self, checkpoint_path: str, reset_scheduler: bool = True):
         """
@@ -198,7 +349,12 @@ class UniDiffuserTrainer:
             self.global_step = int(step_match.group(1))
             logger.info(f"Resuming from step {self.global_step}")
         else:
-            logger.warning(f"Could not extract step number from {checkpoint_path}, starting from step 0")
+            latest_step_path = Path(checkpoint_path) / "latest_step.txt"
+            if latest_step_path.exists():
+                self.global_step = int(latest_step_path.read_text(encoding="utf-8").strip())
+                logger.info(f"Resuming from step {self.global_step} (latest_step.txt)")
+            else:
+                logger.warning(f"Could not extract step number from {checkpoint_path}, starting from step 0")
 
         # Load using accelerator (includes model, optimizer, scheduler states)
         self.accelerator.load_state(checkpoint_path)
@@ -431,6 +587,8 @@ class UniDiffuserTrainer:
             # Save checkpoint
             if self.global_step % self.save_interval == 0:
                 self.save_checkpoint()
+            if self.newest_save_interval > 0 and self.global_step % self.newest_save_interval == 0:
+                self.save_checkpoint(checkpoint_name="newest")
         
         total_time = time.time() - start_time
         if self.rank == 0:
@@ -548,7 +706,17 @@ def main():
                        help="Path to configuration file")
     
     # System settings
-    parser.add_argument("--checkpoint_dir", type=str, default=None, help="Override checkpoint directory")
+    parser.add_argument("--ckpt_dir", type=str, default=None, help="Override ckpt directory")
+    parser.add_argument(
+        "--ckpt_dir_template",
+        type=str,
+        default=None,
+        help=(
+            "Optional ckpt path template. Supported placeholders: "
+            "{ckpt_dir}, {config_name}, {run_name}. "
+            "Example: /aoss/ZhaoRunyi/Motus_{run_name}"
+        ),
+    )
     parser.add_argument("--log_level", type=str, default="INFO", help="Logging level")
     
     # Logging settings
@@ -566,8 +734,8 @@ def main():
     
     # Load configuration
     config = load_config(args.config)
-    if args.checkpoint_dir is not None:
-        config.system.checkpoint_dir = args.checkpoint_dir
+    if args.ckpt_dir is not None:
+        config.system.checkpoint_dir = args.ckpt_dir
     if args.report_to is not None:
         config.logging.report_to = args.report_to
     if args.wandb_project is not None:
@@ -583,26 +751,36 @@ def main():
     except Exception:
         pass
     
-    # Extract dataset name from config file path for checkpoint organization
+    # Extract config name from config file path for checkpoint organization
     config_filename = os.path.basename(args.config)  # e.g., "ac_one.yaml"
-    dataset_name = os.path.splitext(config_filename)[0]  # e.g., "ac_one"
+    config_name = os.path.splitext(config_filename)[0]  # e.g., "ac_one"
     
-    # Update checkpoint directory to include dataset name
-    base_checkpoint_dir = config.system.checkpoint_dir
-    config.system.checkpoint_dir = os.path.join(base_checkpoint_dir, dataset_name)
-    
-    # Create the dataset directory if it doesn't exist
+    # Create run name
+    run_name = config.logging.get('run_name', None)
+    if not run_name:
+        run_name = f"unidiffuser_{config.dataset.type}_bs{config.training.batch_size}_lr{config.training.learning_rate}"
+
+    base_ckpt_dir = config.system.checkpoint_dir
+    config.system.checkpoint_dir = resolve_ckpt_dir(
+        ckpt_dir=base_ckpt_dir,
+        config_name=config_name,
+        run_name=run_name,
+        ckpt_dir_template=args.ckpt_dir_template,
+    )
+
     os.makedirs(config.system.checkpoint_dir, exist_ok=True)
-    
+
     # Initialize Accelerator with DeepSpeed (if provided)
     accelerator_project_config = ProjectConfiguration(total_limit=20)
+    report_to = normalize_report_to(config.logging.get('report_to', 'tensorboard'))
+
     accelerator = Accelerator(
         deepspeed_plugin=DeepSpeedPlugin(
             hf_ds_config=args.deepspeed
         ) if args.deepspeed is not None else None,
         gradient_accumulation_steps=config.training.get('gradient_accumulation_steps', 1),
         mixed_precision="bf16",
-        log_with=config.logging.get('report_to', 'tensorboard'),
+        log_with=report_to,
         project_dir=config.system.checkpoint_dir,
         project_config=accelerator_project_config,
     )
@@ -610,25 +788,8 @@ def main():
     rank = accelerator.process_index
     world_size = accelerator.num_processes
     setup_logging(rank, args.log_level)
-    
-    # Handle report_to settings - expand "all" to individual backends
-    report_to = config.logging.report_to
-    if report_to == "all":
-        report_to = ["wandb", "tensorboard"]
-    elif report_to == "none":
-        report_to = []
-    elif isinstance(report_to, str):
-        report_to = [report_to]
-    
-    # Create run name with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = config.logging.get('run_name', None)
-    if not run_name:
-        run_name = f"unidiffuser_{config.dataset.type}_bs{config.training.batch_size}_lr{config.training.learning_rate}"
-    
-    # Update checkpoint directory to include run name
-    config.system.checkpoint_dir = os.path.join(config.system.checkpoint_dir, run_name)
-    logger.info(f"Dataset: {dataset_name}")
+
+    logger.info(f"Config name: {config_name}")
     logger.info(f"Checkpoints will be saved to: {config.system.checkpoint_dir}")
     
     # Initialize TensorBoard writer
@@ -678,7 +839,12 @@ def main():
                     
                     # Save using torch.save instead of accelerator's default method
                     model_save_path = os.path.join(output_dir, f"pytorch_model_{i}.bin")
-                    torch.save(unwrapped_model.state_dict(), model_save_path)
+                    save_state_dict_with_atomic_replace(
+                        state_dict=unwrapped_model.state_dict(),
+                        output_path=model_save_path,
+                        zipfile_serialization=True,
+                        rank=rank,
+                    )
                     logger.info(f"Model {i} saved to {model_save_path}")
         
         # Register the custom save hook
@@ -689,6 +855,7 @@ def main():
         model, optimizer, train_dataloader, scheduler = accelerator.prepare(
             model, optimizer, train_dataloader, scheduler
         )
+        patch_deepspeed_checkpoint_engine_for_workspace_fs(model=model, rank=rank)
         
         # Create trainer
         trainer = UniDiffuserTrainer(
@@ -703,6 +870,7 @@ def main():
             checkpoint_dir=config.system.checkpoint_dir,
             log_interval=config.system.log_interval,
             save_interval=config.system.save_interval,
+            newest_save_interval=config.system.get('newest_save_interval', 0),
             val_interval=config.system.val_interval,
             report_to=report_to,
             tb_writer=tb_writer,

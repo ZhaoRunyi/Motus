@@ -145,7 +145,7 @@ logging:
   report_to: "wandb"  # Options: "wandb", "tensorboard", "all", "none"
   
   # Weights & Biases settings
-  wandb_project: "motus"
+  wandb_project: "motus-piper"
   
   # TensorBoard settings
   tensorboard_log_dir: "tensorboard_logs"

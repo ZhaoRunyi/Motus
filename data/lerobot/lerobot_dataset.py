@@ -5,6 +5,7 @@ This file provides a thin wrapper around `lerobot.common.datasets.lerobot_datase
 to match Motus' unified dataset interface (aligned with `Motus/data/dataset.py::collate_fn`).
 """
 
+import io
 import os
 import random
 import logging
@@ -17,6 +18,7 @@ import numpy as np
 import torch
 import torch.utils.data as data
 import warnings
+from PIL import Image
 
 try:
     from transformers import AutoProcessor  # type: ignore
@@ -25,6 +27,7 @@ except Exception:  # pragma: no cover
 
 from utils.vlm_utils import preprocess_vlm_messages
 
+from data.lerobot.slai_piper_policy import StateSpaceConfig, get_space_dim, select_state_action_vector
 from data.utils.image_utils import resize_with_padding, tensor_to_pil
 from data.utils.norm import normalize_actions, load_normalization_stats
 
@@ -34,6 +37,18 @@ from lerobot.datasets.video_utils import decode_video_frames
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*multichannel.*")
 
 logger = logging.getLogger(__name__)
+
+
+def read_motus_valid_episode_indices(dataset_root: Path) -> Optional[List[int]]:
+    sidecar_path = dataset_root / "meta" / "motus_valid_episodes.json"
+    if not sidecar_path.exists():
+        return None
+    with open(sidecar_path, "r", encoding="utf-8") as file_obj:
+        payload = json.load(file_obj)
+    indices = payload.get("valid_episode_indices")
+    if not isinstance(indices, list):
+        return None
+    return [int(index) for index in indices]
 
 
 class LeRobotMotusDataset(data.Dataset):
@@ -147,6 +162,8 @@ class LeRobotMotusDataset(data.Dataset):
         video_backend: Optional[str] = None,
 
         embodiment_type: str = "aloha_agilex_2", # for loading normalization statistics
+        state_action_space: Optional[str] = None,
+        state_action_arms: str = "dual",
         task_mode: str = "single", # "single" or "multi"
         task_name: str = "null",
         **kwargs
@@ -183,6 +200,16 @@ class LeRobotMotusDataset(data.Dataset):
         self.image_aug = image_aug # No extra augmentation on LeRobot side for now
         self.task_mode = task_mode
         self.task_name = task_name
+        self.state_action_config = (
+            StateSpaceConfig(ids=state_action_space, arms=state_action_arms)
+            if state_action_space is not None
+            else None
+        )
+        self.state_action_dim = (
+            get_space_dim(self.state_action_config)
+            if self.state_action_config is not None
+            else None
+        )
         
         # ---- T5 fallback config (lazy init) ----
         self.enable_t5_fallback = bool(enable_t5_fallback)
@@ -211,8 +238,9 @@ class LeRobotMotusDataset(data.Dataset):
         if self.task_mode == "single":
             meta = LeRobotDatasetMetadata(self.repo_id, root=self.root)
             total_eps = int(meta.total_episodes)
+            valid_ep_ids = read_motus_valid_episode_indices(Path(meta.root))
             
-            all_ep_ids = list(range(total_eps))
+            all_ep_ids = valid_ep_ids if valid_ep_ids is not None else list(range(total_eps))
             rng = random.Random(0)
             rng.shuffle(all_ep_ids)
 
@@ -235,7 +263,12 @@ class LeRobotMotusDataset(data.Dataset):
             else:
                 raise ValueError(f"Invalid task name: {self.task_name}")
             metas = [LeRobotDatasetMetadata(task_name, root=os.path.join(self.root, task_name)) for task_name in self.repo_ids]
-            self.episode_ids = {task_name: list(range(int(meta.total_episodes))) for task_name, meta in zip(self.repo_ids, metas)}
+            self.episode_ids = {}
+            for task_name, meta in zip(self.repo_ids, metas):
+                valid_ep_ids = read_motus_valid_episode_indices(Path(meta.root))
+                self.episode_ids[task_name] = (
+                    valid_ep_ids if valid_ep_ids is not None else list(range(int(meta.total_episodes)))
+                )
 
         
         
@@ -269,6 +302,14 @@ class LeRobotMotusDataset(data.Dataset):
                 
                 tmp_frame_cnt += int(self.lerobot_dataset._datasets[idx].num_frames)
                 self.frame_num_accumulated.append(tmp_frame_cnt)
+
+        if self.task_mode == "single":
+            self.task_prompts = self.read_task_prompts(Path(self.lerobot_dataset.root))
+        else:
+            self.task_prompts = {
+                repo_id: self.read_task_prompts(Path(dataset.root))
+                for repo_id, dataset in zip(self.repo_ids, self.lerobot_dataset._datasets)
+            }
 
         # Episode-level embedding cache (for external t5 embedding files referenced from meta/episodes.jsonl)
         # key: global episode_index (int) ; value: torch.Tensor
@@ -323,6 +364,15 @@ class LeRobotMotusDataset(data.Dataset):
         current_dir = Path(__file__).parent.parent  # Go up to data directory
         stat_path = current_dir / "utils" / "stat.json"
         self.action_min, self.action_max = load_normalization_stats(str(stat_path), embodiment_type)
+        if (
+            self.state_action_dim is not None
+            and self.action_min is not None
+            and len(self.action_min) != self.state_action_dim
+        ):
+            raise ValueError(
+                f"Normalization stats for {embodiment_type} have dim={len(self.action_min)}, "
+                f"but state_action_space has dim={self.state_action_dim}"
+            )
 
         logger.info(f"LeRobot dataset initialized: repo_id={self.repo_id}, root={self.root}")
         logger.info(f"Embodiment type: {embodiment_type} (for normalization statistics)")
@@ -508,6 +558,100 @@ class LeRobotMotusDataset(data.Dataset):
                 lock_path.unlink()
             except Exception:
                 pass
+
+    def read_task_prompts(self, dataset_root: Path) -> Dict[int, str]:
+        prompts: Dict[int, str] = {}
+        tasks_path = dataset_root / "meta" / "tasks.jsonl"
+        if not tasks_path.exists():
+            return prompts
+
+        with open(tasks_path, "r", encoding="utf-8") as fin:
+            for line in fin:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                prompts[int(row["task_index"])] = row["task"]
+        return prompts
+
+    def get_episode_meta(self, episode_index: int, task_idx: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        if self.task_mode == "single":
+            return self.lerobot_dataset.meta.episodes.get(episode_index, None)
+        return self.lerobot_dataset._datasets[task_idx].meta.episodes.get(episode_index, None)
+
+    def get_prompt(self, item_cond: Dict[str, Any], episode_meta: Optional[Dict[str, Any]], task_idx: Optional[int] = None) -> str:
+        prompt = item_cond.get("language_instruction", None)
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+
+        prompt = item_cond.get("task", None)
+        if isinstance(prompt, str) and prompt.strip() and not prompt.strip().isdigit():
+            return prompt.strip()
+
+        if episode_meta is not None and episode_meta.get("tasks", None):
+            return episode_meta["tasks"][0]
+
+        task_index = item_cond.get("task_index", None)
+        if hasattr(task_index, "item"):
+            task_index = int(task_index.item())
+        elif task_index is not None:
+            task_index = int(task_index)
+
+        if task_index is None:
+            return ""
+
+        if self.task_mode == "single":
+            return self.task_prompts.get(task_index, "")
+        return self.task_prompts[self.repo_ids[task_idx]].get(task_index, "")
+
+    def get_video_path(self, ds_media: Any, episode_index: int, video_key: str) -> Optional[Path]:
+        try:
+            relative_path = ds_media.meta.get_video_file_path(episode_index, video_key)
+        except Exception:
+            return None
+        if relative_path is None:
+            return None
+        video_path = Path(ds_media.root) / relative_path
+        if not video_path.exists():
+            return None
+        return video_path
+
+    def load_image_cell(self, value: Any) -> torch.Tensor:
+        if isinstance(value, dict):
+            value = Image.open(io.BytesIO(value["bytes"])).convert("RGB")
+        if isinstance(value, Image.Image):
+            return torch.from_numpy(np.array(value, copy=True)).permute(2, 0, 1).float() / 255.0
+        return value.float()
+
+    def build_image_frame(self, item_data: Dict[str, Any]) -> torch.Tensor:
+        if self.has_concat:
+            frame = self.load_image_cell(item_data["observation.images.cam_concatenated"])
+            return self._resize_frame_chw(frame, self.video_size)
+
+        if self.has_three_cam:
+            cam_high = self.load_image_cell(item_data["observation.images.cam_high"])
+            cam_left = self.load_image_cell(item_data["observation.images.cam_left_wrist"])
+            cam_right = self.load_image_cell(item_data["observation.images.cam_right_wrist"])
+
+            top_h = int(cam_high.shape[1])
+            target_w = int(cam_high.shape[2])
+            bottom_h = int(max(cam_left.shape[1], cam_right.shape[1]))
+            split_w = target_w // 2
+            right_w = target_w - split_w
+
+            cam_high = self._resize_frame_chw(cam_high, (top_h, target_w))
+            cam_left = self._resize_frame_chw(cam_left, (bottom_h, split_w))
+            cam_right = self._resize_frame_chw(cam_right, (bottom_h, right_w))
+
+            frame = torch.zeros((3, top_h + bottom_h, target_w), dtype=cam_high.dtype)
+            frame[:, :top_h, :target_w] = cam_high
+            frame[:, top_h:, :split_w] = cam_left
+            frame[:, top_h:, split_w:] = cam_right
+            return self._resize_frame_chw(frame, self.video_size)
+
+        key = next(key for key in self.single_view_candidates if key in item_data)
+        frame = self.load_image_cell(item_data[key])
+        return self._resize_frame_chw(frame, self.video_size)
     
     def __len__(self):
         """Return number of episodes."""
@@ -550,63 +694,6 @@ class LeRobotMotusDataset(data.Dataset):
         global_video_indices = [int(from_idx + i) for i in video_indices]
         global_action_indices = [int(from_idx + i) for i in action_indices]
 
-        def _to_chw_float(item_data: dict, key: str) -> torch.Tensor:
-            """Load a frame from item_data and normalize it to float tensor [C,H,W]."""
-            img = item_data[key].float()
-            # LeRobot video/image tensors are typically [C,H,W] already, but keep robust
-            if img.ndim == 3 and img.shape[0] != 3 and img.shape[-1] == 3:
-                img = img.permute(2, 0, 1)
-            return img
-
-        def load_concatenated_view(item_data: dict) -> torch.Tensor:
-            """
-            Build the model input image:
-            - If cam_concatenated exists, use it.
-            - Else stitch cam_high + left/right wrist into a concatenated view (inverse of split logic).
-            """
-            if self.has_concat:
-                img = _to_chw_float(item_data, "observation.images.cam_concatenated")
-                return self._resize_frame_chw(img, self.video_size)
-
-            if self.has_three_cam:
-                cam_high = _to_chw_float(item_data, "observation.images.cam_high")
-                cam_left = _to_chw_float(item_data, "observation.images.cam_left_wrist")
-                cam_right = _to_chw_float(item_data, "observation.images.cam_right_wrist")
-
-                # Inverse of:
-                #   split_h = (H//3)*2 ; split_w = W//2
-                #   high = frame[:split_h, :] ; left = frame[split_h:, :split_w] ; right = frame[split_h:, split_w:]
-                # Here we reconstruct a frame with:
-                #   top: cam_high, bottom-left: cam_left, bottom-right: cam_right.
-                # We assume all cameras have the same resolution.
-                c = cam_high.shape[0]
-                top_h = int(cam_high.shape[1])
-                target_w = int(cam_high.shape[2])
-
-                # Define bottom region height from wrist cams (use max for robustness)
-                bottom_h = int(max(cam_left.shape[1], cam_right.shape[1]))
-                split_w = target_w // 2
-                right_w = target_w - split_w
-
-                cam_high_r = self._resize_frame_chw(cam_high, (top_h, target_w))
-                cam_left_r = self._resize_frame_chw(cam_left, (bottom_h, split_w))
-                cam_right_r = self._resize_frame_chw(cam_right, (bottom_h, right_w))
-
-                out = torch.zeros((c, top_h + bottom_h, target_w), dtype=cam_high_r.dtype)
-                out[:, :top_h, :target_w] = cam_high_r
-                out[:, top_h:, :split_w] = cam_left_r
-                out[:, top_h:, split_w:] = cam_right_r
-
-                return self._resize_frame_chw(out, self.video_size)
-
-            # Fall back to a single-view key
-            for k in self.single_view_candidates:
-                if k in item_data:
-                    img = _to_chw_float(item_data, k)
-                    return self._resize_frame_chw(img, self.video_size)
-            # If we reached here, item_data doesn't contain expected keys
-            raise ValueError("No usable image keys found in item_data")
-
         # ---- Resolve per-task dataset + local indices (multi) ----
         if self.task_mode == "multi":
             base_offset = int(self.frame_num_accumulated[task_idx - 1]) if task_idx > 0 else 0
@@ -624,70 +711,141 @@ class LeRobotMotusDataset(data.Dataset):
 
         # ---- Read conditioning row from parquet only (NO video decoding) ----
         item_cond = hf_dataset[local_cond_idx]
-
-        # ---- Decode visuals in ONE shot per video stream (cond + targets) ----
-        # This avoids reopening/seeking the mp4 for each frame.
-        all_media_indices = [local_cond_idx] + local_video_indices
-        ts_vals = hf_dataset[all_media_indices]["timestamp"]
-        if isinstance(ts_vals, torch.Tensor):
-            timestamps = ts_vals.flatten().tolist()
-        elif isinstance(ts_vals, (list, tuple)) and len(ts_vals) > 0 and isinstance(ts_vals[0], torch.Tensor):
-            timestamps = torch.stack(ts_vals).flatten().tolist()
-        else:
-            # last resort
-            timestamps = [float(x) for x in list(ts_vals)]
-
-        # Use the true episode_index from parquet to build video file paths.
-        # This matters when LeRobotDataset is instantiated with a shuffled/subset `episodes` list (single mode).
         ep_idx_raw = item_cond.get("episode_index", None)
         if ep_idx_raw is None:
-            raise KeyError("episode_index not found in hf_dataset row; cannot resolve video file path")
+            raise KeyError("episode_index not found in hf_dataset row; cannot resolve episode metadata")
         ep_for_video = int(ep_idx_raw.item()) if hasattr(ep_idx_raw, "item") else int(ep_idx_raw)
+        task_idx_local = task_idx if self.task_mode == "multi" else None
+        episode_meta = self.get_episode_meta(ep_for_video, task_idx_local)
+        text_instr = self.get_prompt(item_cond, episode_meta, task_idx_local)
 
-        def _decode_key(vid_key: str) -> torch.Tensor:
-            video_path = Path(ds_media.root) / ds_media.meta.get_video_file_path(ep_for_video, vid_key)
-            frames = decode_video_frames(video_path, timestamps, ds_media.tolerance_s, ds_media.video_backend).squeeze(0)
-            return frames  # [T,C,H,W]
+        all_media_indices = [local_cond_idx] + local_video_indices
+        concat_video_path = None
+        three_cam_video_paths = []
+        single_view_video_path = None
 
         if self.has_concat:
-            frames = _decode_key("observation.images.cam_concatenated")
-            first_frame = self._resize_frame_chw(frames[0].float(), self.video_size)
-            video_frames_sampled = torch.stack(
-                [self._resize_frame_chw(frames[i].float(), self.video_size) for i in range(1, frames.shape[0])],
-                dim=0,
-            )
+            concat_video_path = self.get_video_path(ds_media, ep_for_video, "observation.images.cam_concatenated")
         elif self.has_three_cam:
-            frames_high = _decode_key("observation.images.cam_high")
-            frames_left = _decode_key("observation.images.cam_left_wrist")
-            frames_right = _decode_key("observation.images.cam_right_wrist")
-            stitched = []
-            for i in range(frames_high.shape[0]):
-                stitched.append(
-                    load_concatenated_view(
-                        {
-                            "observation.images.cam_high": frames_high[i],
-                            "observation.images.cam_left_wrist": frames_left[i],
-                            "observation.images.cam_right_wrist": frames_right[i],
-                        }
-                    )
-                )
-            first_frame = stitched[0]
-            video_frames_sampled = torch.stack(stitched[1:], dim=0)
+            three_cam_video_paths = [
+                self.get_video_path(ds_media, ep_for_video, "observation.images.cam_high"),
+                self.get_video_path(ds_media, ep_for_video, "observation.images.cam_left_wrist"),
+                self.get_video_path(ds_media, ep_for_video, "observation.images.cam_right_wrist"),
+            ]
         else:
-            # Fall back to a single-view key
-            vid_key = None
-            for k in self.single_view_candidates:
-                if k in ds_media.meta.video_keys or k in hf_dataset.column_names:
-                    vid_key = k
+            for key in self.single_view_candidates:
+                video_path = self.get_video_path(ds_media, ep_for_video, key)
+                if video_path is not None:
+                    single_view_video_path = video_path
                     break
-            if vid_key is None:
-                vid_key = self.single_view_candidates[0]
-            frames = _decode_key(vid_key)
-            first_frame = self._resize_frame_chw(frames[0].float(), self.video_size)
-            video_frames_sampled = torch.stack(
-                [self._resize_frame_chw(frames[i].float(), self.video_size) for i in range(1, frames.shape[0])],
-                dim=0,
-            )
+
+        has_video_backing = bool(
+            concat_video_path is not None
+            or (self.has_three_cam and all(path is not None for path in three_cam_video_paths))
+            or (single_view_video_path is not None)
+        )
+
+        if has_video_backing:
+            def _to_chw_float(item_data: dict, key: str) -> torch.Tensor:
+                img = item_data[key].float()
+                if img.ndim == 3 and img.shape[0] != 3 and img.shape[-1] == 3:
+                    img = img.permute(2, 0, 1)
+                return img
+
+            def load_concatenated_view(item_data: dict) -> torch.Tensor:
+                if self.has_concat:
+                    img = _to_chw_float(item_data, "observation.images.cam_concatenated")
+                    return self._resize_frame_chw(img, self.video_size)
+
+                if self.has_three_cam:
+                    cam_high = _to_chw_float(item_data, "observation.images.cam_high")
+                    cam_left = _to_chw_float(item_data, "observation.images.cam_left_wrist")
+                    cam_right = _to_chw_float(item_data, "observation.images.cam_right_wrist")
+
+                    c = cam_high.shape[0]
+                    top_h = int(cam_high.shape[1])
+                    target_w = int(cam_high.shape[2])
+                    bottom_h = int(max(cam_left.shape[1], cam_right.shape[1]))
+                    split_w = target_w // 2
+                    right_w = target_w - split_w
+
+                    cam_high_r = self._resize_frame_chw(cam_high, (top_h, target_w))
+                    cam_left_r = self._resize_frame_chw(cam_left, (bottom_h, split_w))
+                    cam_right_r = self._resize_frame_chw(cam_right, (bottom_h, right_w))
+
+                    out = torch.zeros((c, top_h + bottom_h, target_w), dtype=cam_high_r.dtype)
+                    out[:, :top_h, :target_w] = cam_high_r
+                    out[:, top_h:, :split_w] = cam_left_r
+                    out[:, top_h:, split_w:] = cam_right_r
+
+                    return self._resize_frame_chw(out, self.video_size)
+
+                for key in self.single_view_candidates:
+                    if key in item_data:
+                        img = _to_chw_float(item_data, key)
+                        return self._resize_frame_chw(img, self.video_size)
+                raise ValueError("No usable image keys found in item_data")
+
+            ts_vals = hf_dataset[all_media_indices]["timestamp"]
+            if isinstance(ts_vals, torch.Tensor):
+                timestamps = ts_vals.flatten().tolist()
+            elif isinstance(ts_vals, (list, tuple)) and len(ts_vals) > 0 and isinstance(ts_vals[0], torch.Tensor):
+                timestamps = torch.stack(ts_vals).flatten().tolist()
+            else:
+                timestamps = [float(x) for x in list(ts_vals)]
+
+            def _decode_key(video_key: str) -> torch.Tensor:
+                video_path = Path(ds_media.root) / ds_media.meta.get_video_file_path(ep_for_video, video_key)
+                frames = decode_video_frames(video_path, timestamps, ds_media.tolerance_s, ds_media.video_backend).squeeze(0)
+                return frames
+
+            if self.has_concat:
+                frames = _decode_key("observation.images.cam_concatenated")
+                first_frame = self._resize_frame_chw(frames[0].float(), self.video_size)
+                video_frames_sampled = torch.stack(
+                    [self._resize_frame_chw(frames[i].float(), self.video_size) for i in range(1, frames.shape[0])],
+                    dim=0,
+                )
+            elif self.has_three_cam:
+                frames_high = _decode_key("observation.images.cam_high")
+                frames_left = _decode_key("observation.images.cam_left_wrist")
+                frames_right = _decode_key("observation.images.cam_right_wrist")
+                stitched = []
+                for i in range(frames_high.shape[0]):
+                    stitched.append(
+                        load_concatenated_view(
+                            {
+                                "observation.images.cam_high": frames_high[i],
+                                "observation.images.cam_left_wrist": frames_left[i],
+                                "observation.images.cam_right_wrist": frames_right[i],
+                            }
+                        )
+                    )
+                first_frame = stitched[0]
+                video_frames_sampled = torch.stack(stitched[1:], dim=0)
+            else:
+                vid_key = None
+                for key in self.single_view_candidates:
+                    if key in ds_media.meta.video_keys or key in hf_dataset.column_names:
+                        vid_key = key
+                        break
+                if vid_key is None:
+                    vid_key = self.single_view_candidates[0]
+                frames = _decode_key(vid_key)
+                first_frame = self._resize_frame_chw(frames[0].float(), self.video_size)
+                video_frames_sampled = torch.stack(
+                    [self._resize_frame_chw(frames[i].float(), self.video_size) for i in range(1, frames.shape[0])],
+                    dim=0,
+                )
+        else:
+            media_batch = hf_dataset[all_media_indices]
+            media_rows = [
+                {key: values[i] for key, values in media_batch.items()}
+                for i in range(len(all_media_indices))
+            ]
+            frame_list = [self.build_image_frame(row) for row in media_rows]
+            first_frame = frame_list[0]
+            video_frames_sampled = torch.stack(frame_list[1:], dim=0)
 
         # Compatibility: some datasets don't have an explicit state, so use actions as state (e.g., qpos)
         if "observation.state" in item_cond:
@@ -711,11 +869,14 @@ class LeRobotMotusDataset(data.Dataset):
         if isinstance(action_values, torch.Tensor):
             action_sequence = action_values.float()
         elif isinstance(action_values, (list, tuple)) and len(action_values) > 0 and isinstance(action_values[0], torch.Tensor):
-            action_sequence = torch.stack([v.float() for v in action_values], dim=0)
+            action_sequence = torch.stack([value.float() for value in action_values], dim=0)
         elif isinstance(action_values, (list, tuple)) and len(action_values) > 0 and isinstance(action_values[0], np.ndarray):
             action_sequence = torch.from_numpy(np.stack(action_values, axis=0)).float()
         else:
             action_sequence = torch.tensor(action_values, dtype=torch.float32)
+        if self.state_action_config is not None:
+            initial_state = select_state_action_vector(initial_state, self.state_action_config)
+            action_sequence = select_state_action_vector(action_sequence, self.state_action_config)
         
         # Language embedding:
         # 1) Prefer parquet (legacy: each frame has `language_embedding`)
@@ -733,10 +894,7 @@ class LeRobotMotusDataset(data.Dataset):
 
             cached = self._episode_embedding_cache.get(ep_index, None)
             if cached is None:
-                if self.task_mode == 'single':
-                    ep_meta = self.lerobot_dataset.meta.episodes.get(ep_index, None)
-                else:
-                    ep_meta = self.lerobot_dataset._datasets[task_idx].meta.episodes.get(ep_index, None)
+                ep_meta = self.get_episode_meta(ep_index, task_idx_local)
                 if ep_meta is None:
                     raise KeyError(f"episode {ep_index} not found in meta.episodes")
 
@@ -748,13 +906,7 @@ class LeRobotMotusDataset(data.Dataset):
                             "you can set enable_t5_fallback=True to encode and cache T5 embeddings on-the-fly."
                         )
 
-                    # On-the-fly encoding (use language_instruction, fallback to task)
-                    instr = item_cond.get("language_instruction", None)
-                    if instr is None or (isinstance(instr, str) and len(instr.strip()) == 0):
-                        instr = item_cond.get("task", "")
-                    if not isinstance(instr, str):
-                        instr = str(instr)
-                    emb = self._encode_and_cache_t5_embedding(ep_index, instr)
+                    emb = self._encode_and_cache_t5_embedding(ep_index, text_instr)
                     self._episode_embedding_cache[ep_index] = emb if isinstance(emb, torch.Tensor) else torch.tensor(emb)
                     cached = self._episode_embedding_cache[ep_index]
                     all_embeddings = cached
@@ -786,10 +938,6 @@ class LeRobotMotusDataset(data.Dataset):
 
         vlm_tokens = None
         if self.vlm_processor:
-            # Prefer dataset-stored text; fallback to `task`
-            text_instr = item_cond.get("language_instruction", None)
-            if text_instr is None or (isinstance(text_instr, str) and len(text_instr.strip()) == 0):
-                text_instr = item_cond.get("task", "")
             first_frame_pil = tensor_to_pil(first_frame)
             vlm_tokens = preprocess_vlm_messages(text_instr, first_frame_pil, self.vlm_processor)
 
