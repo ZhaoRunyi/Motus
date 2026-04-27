@@ -105,6 +105,28 @@ def discover_lerobot_datasets(input_path: Path, ignored_roots: tuple[Path, ...] 
     return deduped
 
 
+def discover_motus_mirror_datasets(input_path: Path) -> list[Path]:
+    input_path = input_path.resolve()
+    if is_lerobot_dataset_root(input_path) and input_path.name.startswith(MOTUS_TARGET_PREFIX):
+        return [input_path]
+
+    datasets: list[Path] = []
+    for info_path in sorted(input_path.rglob("meta/info.json")):
+        candidate = info_path.parent.parent
+        if not candidate.name.startswith(MOTUS_TARGET_PREFIX):
+            continue
+        if is_lerobot_dataset_root(candidate):
+            datasets.append(candidate.resolve())
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for dataset_root in datasets:
+        if dataset_root not in seen:
+            deduped.append(dataset_root)
+            seen.add(dataset_root)
+    return deduped
+
+
 def target_root_for_dataset(source_root: Path, input_path: Path, output_root: Path) -> Path:
     source_root = source_root.resolve()
     input_path = input_path.resolve()
@@ -241,6 +263,75 @@ def copy_directory_tree(source_path: Path, target_path: Path, overwrite: bool) -
     shutil.copytree(source_path, target_path, dirs_exist_ok=overwrite)
 
 
+def resolve_matching_motus_dataset_root(target_root: Path, motus_t5_source_root: Path) -> Path | None:
+    motus_t5_source_root = motus_t5_source_root.resolve()
+    target_name = target_root.name
+
+    if (
+        motus_t5_source_root.name == target_name
+        and motus_t5_source_root.name.startswith(MOTUS_TARGET_PREFIX)
+        and is_lerobot_dataset_root(motus_t5_source_root)
+    ):
+        return motus_t5_source_root
+
+    direct_candidate = motus_t5_source_root / target_name
+    if direct_candidate.name.startswith(MOTUS_TARGET_PREFIX) and is_lerobot_dataset_root(direct_candidate):
+        return direct_candidate.resolve()
+
+    for candidate in discover_motus_mirror_datasets(motus_t5_source_root):
+        if candidate.name == target_name:
+            return candidate
+    return None
+
+
+def seed_t5_cache_from_matching_motus_dataset(
+    target_root: Path,
+    *,
+    motus_t5_source_root: Path | None,
+    t5_folder_name: str,
+    overwrite: bool,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": "not_requested",
+        "source_root": None,
+        "copied_files": 0,
+        "skipped_existing_files": 0,
+    }
+    if motus_t5_source_root is None:
+        return result
+
+    source_dataset_root = resolve_matching_motus_dataset_root(target_root, motus_t5_source_root)
+    if source_dataset_root is None:
+        result["status"] = "source_not_found"
+        return result
+
+    source_t5_root = source_dataset_root / t5_folder_name
+    result["source_root"] = str(source_dataset_root)
+    if not source_t5_root.is_dir():
+        result["status"] = "source_cache_missing"
+        return result
+
+    target_t5_root = target_root / t5_folder_name
+    target_t5_root.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    skipped = 0
+    for source_path in sorted(source_t5_root.rglob("*.pt")):
+        relative_path = source_path.relative_to(source_t5_root)
+        target_path = target_t5_root / relative_path
+        if target_path.exists() and not overwrite:
+            skipped += 1
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+        copied += 1
+
+    result["copied_files"] = copied
+    result["skipped_existing_files"] = skipped
+    result["status"] = "seeded" if copied > 0 else "already_present"
+    return result
+
+
 def normalize_episodes_for_motus(dataset_root: Path, overwrite: bool) -> int:
     tasks_path = dataset_root / "meta" / "tasks.jsonl"
     episodes_path = dataset_root / "meta" / "episodes.jsonl"
@@ -373,6 +464,7 @@ def generate_t5_cache(
     wan_path: str | None,
     device: str | None,
     text_len: int,
+    strip_parquet_metadata: bool,
 ) -> None:
     command = [
         sys.executable,
@@ -390,6 +482,8 @@ def generate_t5_cache(
         command.extend(["--wan_path", wan_path])
     if device:
         command.extend(["--device", device])
+    if strip_parquet_metadata:
+        command.append("--strip_parquet_metadata")
     subprocess.run(command, check=True)
 
 
@@ -432,6 +526,7 @@ def ensure_t5_cache_for_motus(
     wan_path: str | None,
     device: str | None,
     text_len: int,
+    strip_parquet_metadata: bool,
 ) -> str:
     patched = patch_existing_t5_pointers(target_root, t5_folder_name)
     if t5_cache_is_complete(target_root, t5_folder_name):
@@ -451,6 +546,7 @@ def ensure_t5_cache_for_motus(
         wan_path=resolved_wan_path,
         device=device,
         text_len=text_len,
+        strip_parquet_metadata=strip_parquet_metadata,
     )
     if not t5_cache_is_complete(target_root, t5_folder_name):
         raise RuntimeError(f"T5 generation finished but cache is still incomplete: {target_root}")
@@ -567,6 +663,13 @@ def prepare_dataset(
             state_action_space=state_action_space,
             state_action_arms=state_action_arms,
         )
+
+    result["t5_seed"] = seed_t5_cache_from_matching_motus_dataset(
+        target_root,
+        motus_t5_source_root=motus_t5_source_root,
+        t5_folder_name=t5_folder_name,
+        overwrite=overwrite,
+    )
 
     result["t5_status"] = ensure_t5_cache_for_motus(
         target_root=target_root,

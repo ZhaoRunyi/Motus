@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pyarrow as pa
@@ -17,11 +18,14 @@ if str(ROOT) not in sys.path:
 from scripts.prepare_motus_lerobot_datasets import (  # noqa: E402
     default_output_root_for_input,
     discover_lerobot_datasets,
+    discover_motus_mirror_datasets,
     prepare_dataset,
+    seed_t5_cache_from_matching_motus_dataset,
     target_root_for_dataset,
     update_motus_stat_json,
     write_manifest,
 )
+from data.lerobot.repair_parquet_hf_metadata import repair_dataset_parquet_hf_metadata  # noqa: E402
 
 
 def write_jsonlines(path: Path, rows):
@@ -115,6 +119,8 @@ class PrepareMotusLeRobotDatasetsTest(unittest.TestCase):
                 state_action_space="joints",
                 state_action_arms="dual",
                 t5_folder_name="t5_embedding",
+                motus_t5_source_root=None,
+                repair_parquet_hf_metadata=False,
                 wan_path=None,
                 device=None,
                 t5_text_len=512,
@@ -168,12 +174,339 @@ class PrepareMotusLeRobotDatasetsTest(unittest.TestCase):
                 state_action_space="joints",
                 state_action_arms="dual",
                 t5_folder_name="t5_embedding",
+                motus_t5_source_root=None,
+                repair_parquet_hf_metadata=False,
                 wan_path=None,
                 device=None,
                 t5_text_len=512,
                 stat_json_path=stat_json_path,
             )
             self.assertEqual(complete_result["status"], "complete")
+
+    def test_prepare_dataset_can_seed_t5_from_existing_motus_root(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            source_parent = tmp_path / "source"
+            source_root = source_parent / "Piper_click_bell_0403"
+            meta_root = source_root / "meta"
+            data_root = source_root / "data" / "chunk-000"
+            meta_root.mkdir(parents=True)
+            data_root.mkdir(parents=True)
+
+            info = {
+                "codebase_version": "v2.1",
+                "robot_type": "aloha",
+                "total_episodes": 2,
+                "total_frames": 6,
+                "total_tasks": 1,
+                "total_videos": 0,
+                "total_chunks": 1,
+                "chunks_size": 1000,
+                "fps": 10,
+                "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+                "video_path": None,
+                "features": {
+                    "observation.state": {"dtype": "float32", "shape": [32], "names": None},
+                    "action": {"dtype": "float32", "shape": [32], "names": None},
+                    "observation.images.cam_high": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "observation.images.cam_left_wrist": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "observation.images.cam_right_wrist": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+                    "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+                    "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+                    "index": {"dtype": "int64", "shape": [1], "names": None},
+                    "task_index": {"dtype": "int64", "shape": [1], "names": None},
+                },
+            }
+            (meta_root / "info.json").write_text(json.dumps(info), encoding="utf-8")
+            write_jsonlines(meta_root / "tasks.jsonl", [{"task_index": 0, "task": "Click the bell"}])
+            write_jsonlines(
+                meta_root / "episodes.jsonl",
+                [
+                    {"episode_index": 0, "length": 3},
+                    {"episode_index": 1, "length": 3},
+                ],
+            )
+
+            for episode_index in range(2):
+                actions = np.stack(
+                    [np.arange(32, dtype=np.float32) + offset for offset in [10 + episode_index, 20 + episode_index, 30 + episode_index]]
+                )
+                states = np.stack(
+                    [np.arange(32, dtype=np.float32) + offset for offset in [0 + episode_index, 1 + episode_index, 2 + episode_index]]
+                )
+                table = pa.table(
+                    {
+                        "observation.state": pa.array(states.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                        "action": pa.array(actions.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                        "timestamp": pa.array([0.0, 0.1, 0.2], type=pa.float32()),
+                        "frame_index": pa.array([0, 1, 2], type=pa.int64()),
+                        "episode_index": pa.array([episode_index, episode_index, episode_index], type=pa.int64()),
+                        "index": pa.array([0, 1, 2], type=pa.int64()),
+                        "task_index": pa.array([0, 0, 0], type=pa.int64()),
+                    }
+                )
+                pq.write_table(table, data_root / f"episode_{episode_index:06d}.parquet")
+
+            existing_motus_root = tmp_path / "existing"
+            existing_dataset_root = existing_motus_root / "Motus_Piper_click_bell_0403"
+            existing_meta_root = existing_dataset_root / "meta"
+            existing_t5_root = existing_dataset_root / "t5_embedding"
+            existing_meta_root.mkdir(parents=True)
+            existing_t5_root.mkdir(parents=True)
+            (existing_meta_root / "info.json").write_text(json.dumps(info), encoding="utf-8")
+            write_jsonlines(
+                existing_meta_root / "tasks.jsonl",
+                [{"task_index": 0, "task": "Click the bell"}],
+            )
+            write_jsonlines(
+                existing_meta_root / "episodes.jsonl",
+                [
+                    {"episode_index": 0, "length": 3, "t5_embedding_path": "t5_embedding/episode_000000.pt"},
+                    {"episode_index": 1, "length": 3, "t5_embedding_path": "t5_embedding/episode_000001.pt"},
+                ],
+            )
+            (existing_t5_root / "episode_000000.pt").write_bytes(b"seed0")
+            (existing_t5_root / "episode_000001.pt").write_bytes(b"seed1")
+
+            discovered = discover_motus_mirror_datasets(existing_motus_root)
+            self.assertEqual(discovered, [existing_dataset_root.resolve()])
+
+            target_root = tmp_path / "prepared" / "Motus_Piper_click_bell_0403"
+            stat_json_path = tmp_path / "stat.json"
+
+            with mock.patch("scripts.prepare_motus_lerobot_datasets.generate_t5_cache") as generate_t5_cache:
+                result = prepare_dataset(
+                    source_root=source_root,
+                    target_root=target_root,
+                    overwrite=False,
+                    allow_incompatible=False,
+                    dry_run=False,
+                    state_action_space="joints",
+                    state_action_arms="dual",
+                    t5_folder_name="t5_embedding",
+                    motus_t5_source_root=existing_motus_root,
+                    repair_parquet_hf_metadata=False,
+                    wan_path=None,
+                    device=None,
+                    t5_text_len=512,
+                    stat_json_path=stat_json_path,
+                )
+
+            generate_t5_cache.assert_not_called()
+            self.assertEqual(result["t5_seed"]["status"], "seeded")
+            self.assertEqual(result["t5_seed"]["copied_files"], 2)
+            self.assertEqual(result["t5_status"], "pointers_fixed")
+            self.assertEqual((target_root / "t5_embedding" / "episode_000000.pt").read_bytes(), b"seed0")
+            self.assertEqual((target_root / "t5_embedding" / "episode_000001.pt").read_bytes(), b"seed1")
+            target_episodes = [
+                json.loads(line)
+                for line in (target_root / "meta" / "episodes.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(target_episodes[0]["t5_embedding_path"], "t5_embedding/episode_000000.pt")
+            self.assertEqual(target_episodes[1]["t5_embedding_path"], "t5_embedding/episode_000001.pt")
+
+    def test_seed_t5_cache_skips_existing_files_when_not_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            target_root = tmp_path / "prepared" / "Motus_Piper_click_bell_0403"
+            target_meta = target_root / "meta"
+            target_t5 = target_root / "t5_embedding"
+            target_meta.mkdir(parents=True)
+            target_t5.mkdir(parents=True)
+            info = {
+                "features": {},
+                "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+                "video_path": None,
+            }
+            (target_meta / "info.json").write_text(json.dumps(info), encoding="utf-8")
+            write_jsonlines(target_meta / "episodes.jsonl", [{"episode_index": 0, "length": 1}])
+            write_jsonlines(target_meta / "tasks.jsonl", [{"task_index": 0, "task": "Click the bell"}])
+            (target_t5 / "episode_000000.pt").write_bytes(b"local")
+
+            source_root = tmp_path / "existing" / "Motus_Piper_click_bell_0403"
+            source_meta = source_root / "meta"
+            source_t5 = source_root / "t5_embedding"
+            source_meta.mkdir(parents=True)
+            source_t5.mkdir(parents=True)
+            (source_meta / "info.json").write_text(json.dumps(info), encoding="utf-8")
+            write_jsonlines(source_meta / "episodes.jsonl", [{"episode_index": 0, "length": 1}])
+            write_jsonlines(source_meta / "tasks.jsonl", [{"task_index": 0, "task": "Click the bell"}])
+            (source_t5 / "episode_000000.pt").write_bytes(b"remote")
+
+            result = seed_t5_cache_from_matching_motus_dataset(
+                target_root,
+                motus_t5_source_root=tmp_path / "existing",
+                t5_folder_name="t5_embedding",
+                overwrite=False,
+            )
+
+            self.assertEqual(result["status"], "already_present")
+            self.assertEqual(result["copied_files"], 0)
+            self.assertEqual(result["skipped_existing_files"], 1)
+            self.assertEqual((target_t5 / "episode_000000.pt").read_bytes(), b"local")
+
+    def test_repair_dataset_parquet_hf_metadata_strips_incompatible_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dataset_root = Path(tmp_dir) / "Piper_bad_metadata"
+            data_root = dataset_root / "data" / "chunk-000"
+            data_root.mkdir(parents=True)
+
+            states = np.stack([np.arange(32, dtype=np.float32) + offset for offset in [0, 1, 2]])
+            actions = np.stack([np.arange(32, dtype=np.float32) + offset for offset in [10, 20, 30]])
+            table = pa.table(
+                {
+                    "observation.state": pa.array(states.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                    "action": pa.array(actions.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                    "timestamp": pa.array([0.0, 0.1, 0.2], type=pa.float32()),
+                    "frame_index": pa.array([0, 1, 2], type=pa.int64()),
+                    "episode_index": pa.array([0, 0, 0], type=pa.int64()),
+                    "index": pa.array([0, 1, 2], type=pa.int64()),
+                    "task_index": pa.array([0, 0, 0], type=pa.int64()),
+                }
+            )
+            bad_hf_metadata = {
+                "info": {
+                    "features": {
+                        "observation.state": {
+                            "feature": {"dtype": "float32", "_type": "Value"},
+                            "length": 32,
+                            "_type": "List",
+                        },
+                        "action": {
+                            "feature": {"dtype": "float32", "_type": "Value"},
+                            "length": 32,
+                            "_type": "List",
+                        },
+                        "timestamp": {"dtype": "float32", "_type": "Value"},
+                        "frame_index": {"dtype": "int64", "_type": "Value"},
+                        "episode_index": {"dtype": "int64", "_type": "Value"},
+                        "index": {"dtype": "int64", "_type": "Value"},
+                        "task_index": {"dtype": "int64", "_type": "Value"},
+                    }
+                }
+            }
+            parquet_path = data_root / "episode_000000.parquet"
+            pq.write_table(
+                table.replace_schema_metadata(
+                    {b"huggingface": json.dumps(bad_hf_metadata, ensure_ascii=False).encode("utf-8")}
+                ),
+                parquet_path,
+            )
+
+            result = repair_dataset_parquet_hf_metadata(dataset_root)
+
+            self.assertEqual(result["status"], "repaired")
+            self.assertEqual(result["repaired_files"], 1)
+            repaired_metadata = pq.read_schema(parquet_path).metadata or {}
+            self.assertNotIn(b"huggingface", repaired_metadata)
+
+    def test_prepare_dataset_can_repair_source_parquet_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            source_root = tmp_path / "source" / "Piper_repair_me"
+            meta_root = source_root / "meta"
+            data_root = source_root / "data" / "chunk-000"
+            t5_root = source_root / "t5_embedding"
+            meta_root.mkdir(parents=True)
+            data_root.mkdir(parents=True)
+            t5_root.mkdir(parents=True)
+
+            info = {
+                "codebase_version": "v2.1",
+                "robot_type": "aloha",
+                "total_episodes": 1,
+                "total_frames": 3,
+                "total_tasks": 1,
+                "total_videos": 0,
+                "total_chunks": 1,
+                "chunks_size": 1000,
+                "fps": 10,
+                "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+                "video_path": None,
+                "features": {
+                    "observation.state": {"dtype": "float32", "shape": [32], "names": None},
+                    "action": {"dtype": "float32", "shape": [32], "names": None},
+                    "observation.images.cam_high": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "observation.images.cam_left_wrist": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "observation.images.cam_right_wrist": {"dtype": "image", "shape": [3, 8, 8], "names": None},
+                    "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+                    "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+                    "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+                    "index": {"dtype": "int64", "shape": [1], "names": None},
+                    "task_index": {"dtype": "int64", "shape": [1], "names": None},
+                },
+            }
+            (meta_root / "info.json").write_text(json.dumps(info), encoding="utf-8")
+            write_jsonlines(meta_root / "tasks.jsonl", [{"task_index": 0, "task": "Repair metadata"}])
+            write_jsonlines(
+                meta_root / "episodes.jsonl",
+                [{"episode_index": 0, "length": 3, "t5_embedding_path": "t5_embedding/episode_000000.pt"}],
+            )
+            (t5_root / "episode_000000.pt").write_bytes(b"seed0")
+
+            states = np.stack([np.arange(32, dtype=np.float32) + offset for offset in [0, 1, 2]])
+            actions = np.stack([np.arange(32, dtype=np.float32) + offset for offset in [10, 20, 30]])
+            table = pa.table(
+                {
+                    "observation.state": pa.array(states.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                    "action": pa.array(actions.tolist(), type=pa.list_(pa.float32(), list_size=32)),
+                    "timestamp": pa.array([0.0, 0.1, 0.2], type=pa.float32()),
+                    "frame_index": pa.array([0, 1, 2], type=pa.int64()),
+                    "episode_index": pa.array([0, 0, 0], type=pa.int64()),
+                    "index": pa.array([0, 1, 2], type=pa.int64()),
+                    "task_index": pa.array([0, 0, 0], type=pa.int64()),
+                }
+            )
+            bad_hf_metadata = {
+                "info": {
+                    "features": {
+                        "observation.state": {
+                            "feature": {"dtype": "float32", "_type": "Value"},
+                            "length": 32,
+                            "_type": "List",
+                        },
+                        "action": {
+                            "feature": {"dtype": "float32", "_type": "Value"},
+                            "length": 32,
+                            "_type": "List",
+                        },
+                        "timestamp": {"dtype": "float32", "_type": "Value"},
+                        "frame_index": {"dtype": "int64", "_type": "Value"},
+                        "episode_index": {"dtype": "int64", "_type": "Value"},
+                        "index": {"dtype": "int64", "_type": "Value"},
+                        "task_index": {"dtype": "int64", "_type": "Value"},
+                    }
+                }
+            }
+            parquet_path = data_root / "episode_000000.parquet"
+            pq.write_table(
+                table.replace_schema_metadata(
+                    {b"huggingface": json.dumps(bad_hf_metadata, ensure_ascii=False).encode("utf-8")}
+                ),
+                parquet_path,
+            )
+
+            result = prepare_dataset(
+                source_root=source_root,
+                target_root=tmp_path / "prepared" / "Motus_Piper_repair_me",
+                overwrite=False,
+                allow_incompatible=False,
+                dry_run=False,
+                state_action_space="joints",
+                state_action_arms="dual",
+                t5_folder_name="t5_embedding",
+                motus_t5_source_root=None,
+                repair_parquet_hf_metadata=True,
+                wan_path=None,
+                device=None,
+                t5_text_len=512,
+                stat_json_path=tmp_path / "stat.json",
+            )
+
+            self.assertEqual(result["parquet_hf_metadata_repair"]["status"], "repaired")
+            self.assertEqual(result["parquet_hf_metadata_repair"]["repaired_files"], 1)
+            self.assertNotIn(b"huggingface", pq.read_schema(parquet_path).metadata or {})
 
 
 if __name__ == "__main__":
