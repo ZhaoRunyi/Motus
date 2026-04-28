@@ -64,6 +64,13 @@ python inference/real_world/Motus/inference_example.py \
 - `examples/output_ac_one.png`: Grid of condition frame + predicted future frames
 - Console: Predicted action chunk with shape `(action_chunk_size, action_dim)`
 
+### 3. Challenge Deploy
+
+The canonical Motus remote deployment entrypoints now live under `inference/challenge_deploy/`.
+The legacy top-level `deploy/` compatibility wrappers were removed, so use
+`inference/challenge_deploy/serve_policy.py` and
+`inference/challenge_deploy/websocket_client_policy.py` directly.
+
 ## Troubleshooting
 
 | Issue | Likely Cause | Solution |
