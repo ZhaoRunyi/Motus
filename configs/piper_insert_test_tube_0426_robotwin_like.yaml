@@ -48,12 +48,12 @@ model:
   action_expert:
     hidden_size: 1024
     ffn_dim_multiplier: 4
-    norm_eps: 1e-5
+    norm_eps: 1.0e-5
 
   und_expert:
     hidden_size: 512
     ffn_dim_multiplier: 4
-    norm_eps: 1e-5
+    norm_eps: 1.0e-5
     vlm:
       input_dim: 2048
       projector_type: "mlp3x_silu"

@@ -81,6 +81,8 @@ class WebsocketClientPolicy:
                     compression=None,
                     max_size=None,
                     additional_headers=headers,
+                    ping_interval=None,
+                    ping_timeout=None,
                 )
                 metadata = unpackb(connection.recv())
                 return connection, metadata
