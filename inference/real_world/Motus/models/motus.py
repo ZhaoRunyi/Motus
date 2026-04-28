@@ -695,10 +695,10 @@ class Motus(nn.Module):
             if not checkpoint_file.exists():
                 raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
             path = str(checkpoint_file)
-    
+
         # Load state dict
         checkpoint = torch.load(path, map_location='cpu')
-        state_dict = checkpoint['module']  
+        state_dict = checkpoint['module']
         missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=strict)
         logger.info(f"Checkpoint loaded from {path}: missing={len(missing_keys)}, unexpected={len(unexpected_keys)}")
         
