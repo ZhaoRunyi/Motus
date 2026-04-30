@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import http
+import json
 import logging
 import os
 from pathlib import Path
@@ -129,6 +130,52 @@ def prompt_cache_filename(prompt: str) -> str:
     return f"{normalized[:80]}_{digest}.pt"
 
 
+def load_jsonlines(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as file_obj:
+        for line in file_obj:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def episode_prompt(episode: dict[str, Any]) -> str | None:
+    tasks = episode.get("tasks")
+    if isinstance(tasks, list) and tasks and isinstance(tasks[0], str) and tasks[0].strip():
+        return tasks[0].strip()
+    task = episode.get("task")
+    if isinstance(task, str) and task.strip() and not task.strip().isdigit():
+        return task.strip()
+    return None
+
+
+def resolve_config_prompt_t5_cache(config_dict: dict[str, Any]) -> tuple[str | None, Path | None]:
+    dataset_params = config_dict.get("dataset", {}).get("params", {})
+    dataset_root = dataset_params.get("root")
+    if not isinstance(dataset_root, str) or not dataset_root:
+        return None, None
+
+    root = Path(dataset_root)
+    episodes_path = root / "meta" / "episodes.jsonl"
+    if not episodes_path.exists():
+        return None, None
+
+    fallback_prompt = None
+    for episode in load_jsonlines(episodes_path):
+        prompt = episode_prompt(episode)
+        if prompt is None:
+            continue
+        if fallback_prompt is None:
+            fallback_prompt = prompt
+        rel_embedding = episode.get("t5_embedding_path")
+        if isinstance(rel_embedding, str):
+            cache_path = root / rel_embedding
+            if cache_path.exists():
+                return prompt, cache_path
+    return fallback_prompt, None
+
+
 class MotusRemotePolicy:
     """Thin policy wrapper that mirrors openpi's remote serving flow."""
 
@@ -144,7 +191,8 @@ class MotusRemotePolicy:
     ) -> None:
         self._device = torch.device(device if torch.cuda.is_available() else "cpu")
         self._config_dict = load_yaml_config(model_config)
-        self._default_prompt = default_prompt
+        config_prompt, config_t5_cache_path = resolve_config_prompt_t5_cache(self._config_dict)
+        self._default_prompt = default_prompt or config_prompt
         self._wan_path = wan_path
         self._state_dim = int(self._config_dict["common"]["state_dim"])
         self._action_dim = int(self._config_dict["common"]["action_dim"])
@@ -182,6 +230,14 @@ class MotusRemotePolicy:
                 raise ValueError("--default_prompt is required when --t5_embeds is used")
             self._fixed_language_embeddings = self._normalize_language_embeddings(
                 torch.load(t5_embeds, map_location=self._device)
+            )
+        elif (
+            self._default_prompt is not None
+            and self._default_prompt == config_prompt
+            and config_t5_cache_path is not None
+        ):
+            self._prompt_cache[self._default_prompt] = self._normalize_language_embeddings(
+                torch.load(config_t5_cache_path, map_location=self._device)
             )
 
         prompt_mode = "request"
