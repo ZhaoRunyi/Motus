@@ -155,11 +155,6 @@ def main():
     parser.add_argument("--t5_folder_name", type=str, default="t5_embedding", help="Cache folder name under dataset root")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing .pt files and meta pointers")
     parser.add_argument("--max_episodes", type=int, default=0, help="Process at most N episodes (0 = all)")
-    parser.add_argument(
-        "--strip_parquet_metadata",
-        action="store_true",
-        help="Also strip parquet schema metadata (fix datasets>=3.x 'List' feature issues).",
-    )
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -231,19 +226,6 @@ def main():
     print(f"Done. updated={updated}, skipped={skipped}.")
     print(f"Dataset root: {dataset_root}")
 
-    if args.strip_parquet_metadata:
-        from Motus.data.lerobot.strip_parquet_hf_metadata import main as strip_main  # type: ignore
-
-        # emulate calling the stripping utility
-        sys.argv = [
-            sys.argv[0],
-            "--dataset_root",
-            str(dataset_root),
-        ]
-        strip_main()
-
 
 if __name__ == "__main__":
     main()
-
-

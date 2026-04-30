@@ -464,7 +464,6 @@ def generate_t5_cache(
     wan_path: str | None,
     device: str | None,
     text_len: int,
-    strip_parquet_metadata: bool,
 ) -> None:
     command = [
         sys.executable,
@@ -482,8 +481,6 @@ def generate_t5_cache(
         command.extend(["--wan_path", wan_path])
     if device:
         command.extend(["--device", device])
-    if strip_parquet_metadata:
-        command.append("--strip_parquet_metadata")
     subprocess.run(command, check=True)
 
 
@@ -526,7 +523,6 @@ def ensure_t5_cache_for_motus(
     wan_path: str | None,
     device: str | None,
     text_len: int,
-    strip_parquet_metadata: bool,
 ) -> str:
     patched = patch_existing_t5_pointers(target_root, t5_folder_name)
     if t5_cache_is_complete(target_root, t5_folder_name):
@@ -546,7 +542,6 @@ def ensure_t5_cache_for_motus(
         wan_path=resolved_wan_path,
         device=device,
         text_len=text_len,
-        strip_parquet_metadata=strip_parquet_metadata,
     )
     if not t5_cache_is_complete(target_root, t5_folder_name):
         raise RuntimeError(f"T5 generation finished but cache is still incomplete: {target_root}")
@@ -598,6 +593,7 @@ def prepare_dataset(
     state_action_space: str,
     state_action_arms: str,
     t5_folder_name: str,
+    motus_t5_source_root: Path | None,
     wan_path: str | None,
     device: str | None,
     t5_text_len: int,
@@ -770,6 +766,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default=None, help="T5 device, e.g. cuda:0 or cpu.")
     parser.add_argument("--t5-folder-name", type=str, default="t5_embedding", help="T5 cache folder in each mirror.")
     parser.add_argument("--t5-text-len", type=int, default=512, help="WAN T5 text length.")
+    parser.add_argument(
+        "--motus-t5-source-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional existing Motus mirror root containing precomputed t5_embedding caches. "
+            "Matching Motus_<dataset_name> caches are copied before generating missing files."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -793,6 +798,7 @@ def main() -> None:
             state_action_space=args.state_action_space,
             state_action_arms=args.state_action_arms,
             t5_folder_name=args.t5_folder_name,
+            motus_t5_source_root=(args.motus_t5_source_root.resolve() if args.motus_t5_source_root is not None else None),
             wan_path=args.wan_path,
             device=args.device,
             t5_text_len=args.t5_text_len,
