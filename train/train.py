@@ -659,13 +659,13 @@ def create_model_and_optimizer(config: OmegaConf) -> tuple:
     
     return model, optimizer, scheduler
 
-def create_dataloaders(config: OmegaConf, rank: int, world_size: int) -> tuple:
+def create_dataloaders(config: OmegaConf, rank: int, world_size: int, use_distributed_sampler: bool = False) -> tuple:
     """Create train and validation dataloaders from config."""
     train_dataset = create_dataset(config, val=False)
     val_dataset = create_dataset(config, val=True)
 
     # Samplers
-    if world_size > 1:
+    if world_size > 1 and use_distributed_sampler:
         train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
         val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
     else:
@@ -726,6 +726,7 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=None, help="Override WandB project name")
     parser.add_argument("--run_name", type=str, default=None, help="Override run name")
     parser.add_argument("--resume", action="store_true", help="Resume from newest or latest checkpoint in resolved ckpt dir")
+    parser.add_argument("--use_distributed_sampler", action="store_true", help="Use explicit DistributedSampler instead of relying only on Accelerator dataloader sharding")
     
     # DeepSpeed settings
     parser.add_argument("--deepspeed", type=str, default=None, help="Path to DeepSpeed config file")
@@ -828,7 +829,7 @@ def main():
         
         # Create dataloaders
         logger.info("Creating dataloaders...")
-        train_dataloader, val_dataloader = create_dataloaders(config, rank, world_size)
+        train_dataloader, val_dataloader = create_dataloaders(config, rank, world_size, args.use_distributed_sampler)
         
         # Create custom saving hook to avoid NCCL timeout issues
         def save_model_hook(models, weights, output_dir):
