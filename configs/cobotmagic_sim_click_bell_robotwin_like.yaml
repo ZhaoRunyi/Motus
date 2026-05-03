@@ -20,7 +20,7 @@ dataset:
 
   params:
     repo_id: "embodichain_sim_data/Motus_cobotmagic_Sim_click_bell"
-    root: "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_click_bell"
+    root: "/workspace/data/embodichain_sim_data/Motus_cobotmagic_Sim_click_bell"
     embodiment_type: "cobotmagic_sim_click_bell_14d"
 
     # Sim data is already 14d joint+gripper state/action, so do not set

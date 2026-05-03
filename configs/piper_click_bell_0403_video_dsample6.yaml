@@ -8,7 +8,7 @@ common:
   num_video_frames: 8
   video_height: 384
   video_width: 320
-  global_downsample_rate: 3
+  global_downsample_rate: 6
   video_action_freq_ratio: 2
 
 dataset:
@@ -19,12 +19,14 @@ dataset:
   task_name: null
 
   params:
-    repo_id: "embodichain_sim_data/Motus_cobotmagic_Sim_manipulate_pipette"
-    root: "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_manipulate_pipette"
-    embodiment_type: "cobotmagic_sim_manipulate_pipette_14d"
+    repo_id: "ZhaoRunyi/Motus_Piper_click_bell_0403"
+    root: "/aoss/data/ZhaoRunyi/Motus_Piper_click_bell_0403"
+    embodiment_type: "piper_click_bell_0403_dual_14d"
+    state_action_space: "joints"
+    state_action_arms: "dual"
 
-    # Sim data is already 14d joint+gripper state/action, so do not set
-    # state_action_space here. LeRobotMotusDataset will use the vectors as-is.
+    # Keep this false for training. Pre-generate t5_embedding/*.pt first with
+    # data/lerobot/add_t5_cache_to_lerobot_dataset.py to avoid per-worker T5 init.
     enable_t5_fallback: false
     t5_wan_path: "/workspace/ckpts"
     t5_folder_name: "t5_embedding"
@@ -107,7 +109,7 @@ logging:
   report_to: "wandb"
   wandb_project: "motus-piper"
   tensorboard_log_dir: "tensorboard_logs"
-  run_name: "cobotmagic_sim_manipulate_pipette_robotwin_like_14d"
+  run_name: "piper_click_bell_0403_robotwin_like_14d"
 
 resume:
   checkpoint_path: null

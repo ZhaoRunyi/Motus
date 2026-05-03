@@ -20,7 +20,7 @@ dataset:
 
   params:
     repo_id: "embodichain_sim_data/Motus_cobotmagic_Sim_beaker_mixer"
-    root: "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_beaker_mixer"
+    root: "/workspace/data/embodichain_sim_data/Motus_cobotmagic_Sim_beaker_mixer"
     embodiment_type: "cobotmagic_sim_beaker_mixer_14d"
 
     # Sim data is already 14d joint+gripper state/action, so do not set

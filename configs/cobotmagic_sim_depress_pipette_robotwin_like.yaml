@@ -19,9 +19,9 @@ dataset:
   task_name: null
 
   params:
-    repo_id: "embodichain_sim_data/Motus_cobotmagic_Sim_sample_loading_duel"
-    root: "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_sample_loading_duel"
-    embodiment_type: "cobotmagic_sim_sample_loading_duel_14d"
+    repo_id: "embodichain_sim_data/Motus_cobotmagic_Sim_depress_pipette"
+    root: "/workspace/data/embodichain_sim_data/Motus_cobotmagic_Sim_depress_pipette"
+    embodiment_type: "cobotmagic_sim_depress_pipette_14d"
 
     # Sim data is already 14d joint+gripper state/action, so do not set
     # state_action_space here. LeRobotMotusDataset will use the vectors as-is.
@@ -107,7 +107,7 @@ logging:
   report_to: "wandb"
   wandb_project: "motus-piper"
   tensorboard_log_dir: "tensorboard_logs"
-  run_name: "cobotmagic_sim_sample_loading_duel_robotwin_like_14d"
+  run_name: "cobotmagic_sim_depress_pipette_robotwin_like_14d"
 
 resume:
   checkpoint_path: null
