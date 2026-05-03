@@ -1,181 +1,121 @@
 {
   "datasets": [
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_beaker_mixer_0421",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_beaker_mixer",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick the beaker, place it on the mixer, then flip the toggle switch with the other arm.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_beaker_mixer_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_beaker_place_it_on_the_mixer_then_flip_the_toggle_switch_with_the_other_0eddfe11679166de.pt",
+          "prompt": "Right arm picks up the beaker and place it on the mixer, then left arm presses the switch",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_beaker_mixer/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/right_arm_picks_up_the_beaker_and_place_it_on_the_mixer_then_left_arm_presses_th_f57800a1adfacabc.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_carry_basket_0426",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_click_bell",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick the bottle then place it to the basket, carry the basket with the other arm.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_carry_basket_0426/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_bottle_then_place_it_to_the_basket_carry_the_basket_with_the_other_arm_f94d24c86dac06f2.pt",
+          "prompt": "Press the button",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_click_bell/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/press_the_button_3dd93fb659b51851.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_click_bell_0403",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_items_handover_place",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Click the bell",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_click_bell_0403/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/click_the_bell_ee1d4996b9ac7fb1.pt",
+          "prompt": "Right arm picks up the pen and hands it to left arm, then places it inside the pen holder",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_items_handover_place/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/right_arm_picks_up_the_pen_and_hands_it_to_left_arm_then_places_it_inside_the_pe_66b1f1a2687c6beb.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_depress_pipette_0421",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_manipulate_pipette",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick the pipette and move it to the center-top of the beaker, use the other arm to depress the plunger.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_depress_pipette_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_pipette_and_move_it_to_the_center_top_of_the_beaker_use_the_other_arm_t_b954c9f52e343857.pt",
+          "prompt": "Use the pipette on the table to transfer liquid from one beaker to another",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_manipulate_pipette/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/use_the_pipette_on_the_table_to_transfer_liquid_from_one_beaker_to_another_45c18f4caa151eaf.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_dock_tubes_0421",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_open_pan",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick up two centrifuge tubes from the table and dock them horizontally.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_dock_tubes_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_up_two_centrifuge_tubes_from_the_table_and_dock_them_horizontally_348d3947f7694813.pt",
+          "prompt": "Use left hand to pick up the lid, right hand to place the carrot into the pan, then left hand to put the lid back on.",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_open_pan/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/use_left_hand_to_pick_up_the_lid_right_hand_to_place_the_carrot_into_the_pan_the_66d2925e85372289.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_insert_test_tube_0426",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_pour_dual",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick up the test tube and place it in the rack.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_insert_test_tube_0426/t5_embedding/episode_000004.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_up_the_test_tube_and_place_it_in_the_rack_c29a3a02e7ddd5f9.pt",
+          "prompt": "pour water from bottle into cup",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_pour_dual/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pour_water_from_bottle_into_cup_6f89355cfc76cb65.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_items_hand_over_place_0421",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_rearr",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Pick up the pen, hand it over to the other arm and then place it in to the pen holder",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_items_hand_over_place_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_up_the_pen_hand_it_over_to_the_other_arm_and_then_place_it_in_to_the_pen_ho_4372a131386d0acf.pt",
+          "prompt": "rearrange the table by placing the spoon and fork on either side of the plate.",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_rearr/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/rearrange_the_table_by_placing_the_spoon_and_fork_on_either_side_of_the_plate_098d131794745af5.pt",
           "status": "copied"
         }
       ]
     },
     {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_open_drawer_0421",
+      "dataset_root": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_sample_loading_duel",
       "copied": 1,
       "skipped_existing": 0,
       "skipped_missing_prompt": 0,
       "skipped_missing_embedding": 0,
       "prompts": [
         {
-          "prompt": "Open the drawer, pick the tomato with another arm then place it in the drawer.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_open_drawer_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/open_the_drawer_pick_the_tomato_with_another_arm_then_place_it_in_the_drawer_ec041740f7964d21.pt",
-          "status": "copied"
-        }
-      ]
-    },
-    {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_open_pan_0421",
-      "copied": 1,
-      "skipped_existing": 0,
-      "skipped_missing_prompt": 0,
-      "skipped_missing_embedding": 0,
-      "prompts": [
-        {
-          "prompt": "Grab the knod on the pan lid, lift it to open the pan, then pick the carrot with the other arm, place it in the pan, then move the lid back to the pan to close it.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_open_pan_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/grab_the_knod_on_the_pan_lid_lift_it_to_open_the_pan_then_pick_the_carrot_with_t_8ba017f6cfe5bd43.pt",
-          "status": "copied"
-        }
-      ]
-    },
-    {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_pour_dual_0421",
-      "copied": 1,
-      "skipped_existing": 0,
-      "skipped_missing_prompt": 0,
-      "skipped_missing_embedding": 0,
-      "prompts": [
-        {
-          "prompt": "Pick the cup and the bottle with the other arm, pour the water from bottle to cup",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_pour_dual_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_cup_and_the_bottle_with_the_other_arm_pour_the_water_from_bottle_to_cup_50109919114b6a2c.pt",
-          "status": "copied"
-        }
-      ]
-    },
-    {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_pour_dual_0427",
-      "copied": 0,
-      "skipped_existing": 1,
-      "skipped_missing_prompt": 0,
-      "skipped_missing_embedding": 0,
-      "prompts": [
-        {
-          "prompt": "Pick the cup and the bottle with the other arm, pour the water from bottle to cup",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_pour_dual_0427/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_cup_and_the_bottle_with_the_other_arm_pour_the_water_from_bottle_to_cup_50109919114b6a2c.pt",
-          "status": "already_present"
-        }
-      ]
-    },
-    {
-      "dataset_root": "/aoss/data/ZhaoRunyi/Motus_Piper_rearr_0421",
-      "copied": 1,
-      "skipped_existing": 0,
-      "skipped_missing_prompt": 0,
-      "skipped_missing_embedding": 0,
-      "prompts": [
-        {
-          "prompt": "Pick the fork and the spoon, place them next to the plate.",
-          "source_path": "/aoss/data/ZhaoRunyi/Motus_Piper_rearr_0421/t5_embedding/episode_000000.pt",
-          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/pick_the_fork_and_the_spoon_place_them_next_to_the_plate_cf22bcb630353c81.pt",
+          "prompt": "The right arm picks up the test tube and hands it to the left arm, then places it on the test tube rack",
+          "source_path": "/aoss/data/embodichain_sim_data/Motus_cobotmagic_Sim_sample_loading_duel/t5_embedding/episode_000000.pt",
+          "target_path": "/huangdi/zry/workspace/workspace_0424/Motus/t5_prompt_cache/the_right_arm_picks_up_the_test_tube_and_hands_it_to_the_left_arm_then_places_it_351eff8dd6f922a9.pt",
           "status": "copied"
         }
       ]
