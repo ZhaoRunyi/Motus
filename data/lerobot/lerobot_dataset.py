@@ -9,6 +9,7 @@ import io
 import os
 import random
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import json
@@ -49,6 +50,30 @@ def read_motus_valid_episode_indices(dataset_root: Path) -> Optional[List[int]]:
     if not isinstance(indices, list):
         return None
     return [int(index) for index in indices]
+
+
+def load_merged_normalization_stats(
+    stat_path: Path,
+    embodiment_type: str,
+    embodiment_types: Optional[List[str]] = None,
+) -> Tuple[np.ndarray, np.ndarray, str]:
+    """Load one normalization entry, or merge several entries by global min/max."""
+    if not embodiment_types:
+        action_min, action_max = load_normalization_stats(str(stat_path), embodiment_type)
+        return action_min, action_max, embodiment_type
+
+    mins: List[np.ndarray] = []
+    maxs: List[np.ndarray] = []
+    for name in embodiment_types:
+        action_min, action_max = load_normalization_stats(str(stat_path), str(name))
+        if action_min is None or action_max is None:
+            raise ValueError(f"Normalization stats for {name} could not be loaded from {stat_path}")
+        mins.append(action_min)
+        maxs.append(action_max)
+
+    merged_min = np.minimum.reduce(mins).astype(np.float32)
+    merged_max = np.maximum.reduce(maxs).astype(np.float32)
+    return merged_min, merged_max, f"merged[{len(embodiment_types)}]"
 
 
 class LeRobotMotusDataset(data.Dataset):
@@ -162,6 +187,7 @@ class LeRobotMotusDataset(data.Dataset):
         video_backend: Optional[str] = None,
 
         embodiment_type: str = "aloha_agilex_2", # for loading normalization statistics
+        embodiment_types: Optional[List[str]] = None,
         state_action_space: Optional[str] = None,
         state_action_arms: str = "dual",
         task_mode: str = "single", # "single" or "multi"
@@ -251,8 +277,8 @@ class LeRobotMotusDataset(data.Dataset):
         elif self.task_mode == "multi":
             if self.task_name == None:
                 self.repo_ids = [task_name for task_name in os.listdir(self.root) if os.path.isdir(os.path.join(self.root, task_name))]
-            elif isinstance(self.task_name, list):
-                self.repo_ids = self.task_name
+            elif isinstance(self.task_name, Sequence) and not isinstance(self.task_name, str):
+                self.repo_ids = [str(task_name) for task_name in self.task_name]
                 for task_name in self.repo_ids:
                     if not os.path.isdir(os.path.join(self.root, task_name)):
                         raise ValueError(f"Task {task_name} not found in {self.root}")
@@ -264,11 +290,14 @@ class LeRobotMotusDataset(data.Dataset):
                 raise ValueError(f"Invalid task name: {self.task_name}")
             metas = [LeRobotDatasetMetadata(task_name, root=os.path.join(self.root, task_name)) for task_name in self.repo_ids]
             self.episode_ids = {}
+            rng = random.Random(0)
             for task_name, meta in zip(self.repo_ids, metas):
                 valid_ep_ids = read_motus_valid_episode_indices(Path(meta.root))
-                self.episode_ids[task_name] = (
-                    valid_ep_ids if valid_ep_ids is not None else list(range(int(meta.total_episodes)))
-                )
+                all_ep_ids = valid_ep_ids if valid_ep_ids is not None else list(range(int(meta.total_episodes)))
+                rng.shuffle(all_ep_ids)
+                if self.max_episodes is not None and self.max_episodes > 0:
+                    all_ep_ids = all_ep_ids[: min(self.max_episodes, len(all_ep_ids))]
+                self.episode_ids[task_name] = all_ep_ids
 
         
         
@@ -363,7 +392,11 @@ class LeRobotMotusDataset(data.Dataset):
         # Load normalization statistics
         current_dir = Path(__file__).parent.parent  # Go up to data directory
         stat_path = current_dir / "utils" / "stat.json"
-        self.action_min, self.action_max = load_normalization_stats(str(stat_path), embodiment_type)
+        self.action_min, self.action_max, self.normalization_stats_name = load_merged_normalization_stats(
+            stat_path,
+            embodiment_type,
+            embodiment_types,
+        )
         if (
             self.state_action_dim is not None
             and self.action_min is not None
@@ -376,6 +409,8 @@ class LeRobotMotusDataset(data.Dataset):
 
         logger.info(f"LeRobot dataset initialized: repo_id={self.repo_id}, root={self.root}")
         logger.info(f"Embodiment type: {embodiment_type} (for normalization statistics)")
+        if embodiment_types:
+            logger.info(f"Merged normalization stats from {len(embodiment_types)} entries: {embodiment_types}")
         logger.info(f"Image source: {'concatenated' if self.has_concat else ('three_cam' if self.has_three_cam else 'single_view')}")
         if self.task_mode == "single":
             logger.info(f"Selected episodes: {len(self.episode_ids)}/{total_eps}")
