@@ -796,6 +796,16 @@ def main():
     world_size = accelerator.num_processes
     setup_logging(rank, args.log_level)
 
+    global_batch_size = config.training.get("global_batch_size", None)
+    if global_batch_size is not None:
+        grad_accum = int(config.training.get("gradient_accumulation_steps", 1))
+        divisor = int(world_size * grad_accum)
+        if int(global_batch_size) % divisor == 0:
+            config.training.batch_size = int(global_batch_size) // divisor
+            logger.info(f"Using global_batch_size={global_batch_size}: per-rank batch_size={config.training.batch_size} (world_size={world_size}, grad_accum={grad_accum})")
+        else:
+            logger.warning(f"global_batch_size={global_batch_size} is not divisible by world_size*grad_accum={divisor}; keeping per-rank batch_size={config.training.batch_size}")
+
     logger.info(f"Config name: {config_name}")
     logger.info(f"Checkpoints will be saved to: {config.system.checkpoint_dir}")
     
