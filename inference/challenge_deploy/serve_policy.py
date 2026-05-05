@@ -238,7 +238,7 @@ class MotusRemotePolicy:
         if self._fixed_language_embeddings is not None:
             prompt_mode = "fixed"
         elif self._prompt_t5_cache_paths:
-            prompt_mode = "request_manifest_cached"
+            prompt_mode = "request_manifest_cached_or_generate" if self._wan_path is not None else "request_manifest_cached"
         elif self._wan_path is not None:
             prompt_mode = "request_cached_or_generate"
         else:
@@ -322,9 +322,12 @@ class MotusRemotePolicy:
             self._prompt_cache[prompt] = self._clone_language_embeddings(normalized)
             return normalized
 
-        if self._prompt_t5_cache_paths or self._wan_path is None:
+        if self._prompt_t5_cache_paths:
+            logger.warning("No precomputed T5 embedding found for prompt %r; generating it with WAN T5.", prompt)
+
+        if self._wan_path is None:
             raise ValueError(
-                f"No precomputed T5 embedding found for prompt {prompt!r}."
+                f"No cached T5 embedding found for prompt {prompt!r}, and --wan_path was not provided for generation."
             )
 
         encoded = self._ensure_t5_encoder()([prompt], device=str(self._device))
