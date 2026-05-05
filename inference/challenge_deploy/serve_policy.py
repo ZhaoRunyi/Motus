@@ -130,50 +130,35 @@ def prompt_cache_filename(prompt: str) -> str:
     return f"{normalized[:80]}_{digest}.pt"
 
 
-def load_jsonlines(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as file_obj:
-        for line in file_obj:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def episode_prompt(episode: dict[str, Any]) -> str | None:
-    tasks = episode.get("tasks")
-    if isinstance(tasks, list) and tasks and isinstance(tasks[0], str) and tasks[0].strip():
-        return tasks[0].strip()
-    task = episode.get("task")
-    if isinstance(task, str) and task.strip() and not task.strip().isdigit():
-        return task.strip()
-    return None
-
-
-def resolve_config_prompt_t5_cache(config_dict: dict[str, Any]) -> tuple[str | None, Path | None]:
-    dataset_params = config_dict.get("dataset", {}).get("params", {})
-    dataset_root = dataset_params.get("root")
-    if not isinstance(dataset_root, str) or not dataset_root:
-        return None, None
-
-    root = Path(dataset_root)
-    episodes_path = root / "meta" / "episodes.jsonl"
-    if not episodes_path.exists():
-        return None, None
-
-    fallback_prompt = None
-    for episode in load_jsonlines(episodes_path):
-        prompt = episode_prompt(episode)
-        if prompt is None:
+def resolve_config_prompt_t5_cache(
+    config_dict: dict[str, Any],
+) -> tuple[str | None, Path | None, dict[str, Path], dict[str, str]]:
+    dataset_config = config_dict.get("dataset", {})
+    task_names = dataset_config.get("task_name", dataset_config.get("params", {}).get("task_name"))
+    if isinstance(task_names, str):
+        task_names = [task_names]
+    selected_task_names = {str(task_name) for task_name in task_names or []}
+    if not selected_task_names and isinstance(dataset_config.get("params", {}).get("root"), str):
+        selected_task_names = {Path(dataset_config["params"]["root"]).name}
+    prompt_to_path: dict[str, Path] = {}
+    path_to_prompt: dict[str, str] = {}
+    manifest_path = PROJECT_ROOT / "t5_prompt_cache" / "prompt_cache_manifest.json"
+    if not manifest_path.exists():
+        return None, None, prompt_to_path, path_to_prompt
+    for dataset in json.loads(manifest_path.read_text(encoding="utf-8")).get("datasets", []):
+        dataset_name = dataset.get("dataset_name") or Path(str(dataset.get("dataset_root", ""))).name
+        if selected_task_names and dataset_name not in selected_task_names:
             continue
-        if fallback_prompt is None:
-            fallback_prompt = prompt
-        rel_embedding = episode.get("t5_embedding_path")
-        if isinstance(rel_embedding, str):
-            cache_path = root / rel_embedding
-            if cache_path.exists():
-                return prompt, cache_path
-    return fallback_prompt, None
+        for item in dataset.get("prompts", []):
+            prompt, target_path = item.get("prompt"), item.get("target_path")
+            if isinstance(prompt, str) and isinstance(target_path, str):
+                cache_path = Path(target_path).expanduser().resolve(strict=False)
+                prompt_to_path[prompt.strip()] = cache_path
+                path_to_prompt[str(cache_path)] = prompt.strip()
+    if prompt_to_path and len(selected_task_names) == 1:
+        prompt = next(iter(prompt_to_path))
+        return prompt, prompt_to_path[prompt], prompt_to_path, path_to_prompt
+    return None, None, prompt_to_path, path_to_prompt
 
 
 class MotusRemotePolicy:
@@ -191,8 +176,17 @@ class MotusRemotePolicy:
     ) -> None:
         self._device = torch.device(device if torch.cuda.is_available() else "cpu")
         self._config_dict = load_yaml_config(model_config)
-        config_prompt, config_t5_cache_path = resolve_config_prompt_t5_cache(self._config_dict)
-        self._default_prompt = default_prompt or config_prompt
+        (
+            config_prompt,
+            config_t5_cache_path,
+            self._prompt_t5_cache_paths,
+            self._t5_cache_prompts,
+        ) = resolve_config_prompt_t5_cache(self._config_dict)
+        requested_t5_path = Path(t5_embeds).expanduser().resolve(strict=False) if t5_embeds is not None else None
+        mapped_t5_prompt = self._t5_cache_prompts.get(str(requested_t5_path)) if requested_t5_path is not None else None
+        if default_prompt is not None and mapped_t5_prompt is not None and default_prompt != mapped_t5_prompt:
+            raise ValueError(f"--default_prompt {default_prompt!r} does not match --t5_embeds {requested_t5_path}")
+        self._default_prompt = default_prompt or mapped_t5_prompt or (None if requested_t5_path is not None else config_prompt)
         self._wan_path = wan_path
         self._state_dim = int(self._config_dict["common"]["state_dim"])
         self._action_dim = int(self._config_dict["common"]["action_dim"])
@@ -227,9 +221,9 @@ class MotusRemotePolicy:
 
         if t5_embeds is not None:
             if self._default_prompt is None:
-                raise ValueError("--default_prompt is required when --t5_embeds is used")
+                raise ValueError("--default_prompt is required when --t5_embeds is not listed in prompt_cache_manifest.json")
             self._fixed_language_embeddings = self._normalize_language_embeddings(
-                torch.load(t5_embeds, map_location=self._device)
+                torch.load(requested_t5_path, map_location=self._device)
             )
         elif (
             self._default_prompt is not None
@@ -243,6 +237,8 @@ class MotusRemotePolicy:
         prompt_mode = "request"
         if self._fixed_language_embeddings is not None:
             prompt_mode = "fixed"
+        elif self._prompt_t5_cache_paths:
+            prompt_mode = "request_manifest_cached"
         elif self._wan_path is not None:
             prompt_mode = "request_cached_or_generate"
         else:
@@ -254,6 +250,7 @@ class MotusRemotePolicy:
             "default_prompt": self._default_prompt,
             "prompt_mode": prompt_mode,
             "prompt_t5_cache_dir": str(self._prompt_t5_cache_dir),
+            "prompt_t5_mapping_count": len(self._prompt_t5_cache_paths),
             "image_size": [self._video_height, self._video_width],
             "state_dim": self._state_dim,
             "action_dim": self._action_dim,
@@ -285,15 +282,30 @@ class MotusRemotePolicy:
     def close_predicted_videos(self, session_ids: set[str]) -> None:
         self._predicted_videos.close_many(session_ids)
 
+    def _request_t5_path(self, obs: dict[str, Any]) -> Path | None:
+        value = obs.get("t5_embeds_path", obs.get("t5_embedding_path"))
+        if value is None and isinstance(obs.get("t5_embeds"), (str, os.PathLike)):
+            value = obs["t5_embeds"]
+        return Path(value).expanduser().resolve(strict=False) if isinstance(value, (str, os.PathLike)) else None
+
     def _resolve_prompt(self, obs: dict[str, Any]) -> str:
         if self._fixed_language_embeddings is not None:
             return self._default_prompt
-        prompt = obs.get("prompt", self._default_prompt)
+        request_t5_path = self._request_t5_path(obs)
+        mapped_prompt = self._t5_cache_prompts.get(str(request_t5_path)) if request_t5_path is not None else None
+        request_prompt = obs.get("prompt")
+        if request_prompt is not None and mapped_prompt is not None and request_prompt != mapped_prompt:
+            raise ValueError(f"prompt {request_prompt!r} does not match T5 embedding {request_t5_path}")
+        prompt = request_prompt or mapped_prompt or (self._default_prompt if request_t5_path is None else None)
         if prompt is None:
             raise ValueError("prompt is required when no fixed --default_prompt is configured")
         return prompt
 
     def _resolve_language_embeddings(self, obs: dict[str, Any], prompt: str) -> list[torch.Tensor]:
+        request_t5_path = self._request_t5_path(obs)
+        if request_t5_path is not None:
+            return self._normalize_language_embeddings(torch.load(request_t5_path, map_location=self._device))
+
         if "t5_embeds" in obs:
             return self._normalize_language_embeddings(obs["t5_embeds"])
 
@@ -304,15 +316,15 @@ class MotusRemotePolicy:
         if cached is not None:
             return self._clone_language_embeddings(cached)
 
-        cache_path = self._prompt_t5_cache_dir / prompt_cache_filename(prompt)
+        cache_path = self._prompt_t5_cache_paths.get(prompt, self._prompt_t5_cache_dir / prompt_cache_filename(prompt))
         if cache_path.exists():
             normalized = self._normalize_language_embeddings(torch.load(cache_path, map_location=self._device))
             self._prompt_cache[prompt] = self._clone_language_embeddings(normalized)
             return normalized
 
-        if self._wan_path is None:
+        if self._prompt_t5_cache_paths or self._wan_path is None:
             raise ValueError(
-                f"No cached T5 embedding found for prompt {prompt!r}, and --wan_path was not provided for generation."
+                f"No precomputed T5 embedding found for prompt {prompt!r}."
             )
 
         encoded = self._ensure_t5_encoder()([prompt], device=str(self._device))
