@@ -13,17 +13,17 @@ dataset:
   image_aug: false
   task_mode: "multi"
   task_name:
-    - "MotusVideo_Piper_beaker_mixer_0421"
-    - "MotusVideo_Piper_carry_basket_0426"
-    - "MotusVideo_Piper_click_bell_0403"
-    - "MotusVideo_Piper_depress_pipette_0421"
-    - "MotusVideo_Piper_dock_tubes_0421"
-    - "MotusVideo_Piper_insert_test_tube_0430"
-    - "MotusVideo_Piper_items_hand_over_place_0421"
-    - "MotusVideo_Piper_open_drawer_0421"
-    - "MotusVideo_Piper_open_pan_0421"
-    - "MotusVideo_Piper_pour_dual_0427"
-    - "MotusVideo_Piper_rearr_0421"
+    - "Motus_Piper_beaker_mixer_0421"
+    - "Motus_Piper_carry_basket_0426"
+    - "Motus_Piper_click_bell_0403"
+    - "Motus_Piper_depress_pipette_0421"
+    - "Motus_Piper_dock_tubes_0421"
+    - "Motus_Piper_insert_test_tube_0430"
+    - "Motus_Piper_items_hand_over_place_0421"
+    - "Motus_Piper_open_drawer_0421"
+    - "Motus_Piper_open_pan_0421"
+    - "Motus_Piper_pour_dual_0427"
+    - "Motus_Piper_rearr_0421"
 
   params:
     repo_id: "piper_multi_tasks"
@@ -96,7 +96,8 @@ model:
     max_value: 0.9999
 
 training:
-  batch_size: 8
+  global_batch_size: 256
+  batch_size: 8 # 32 GPUs
   max_steps: 40000
   learning_rate: 5.0e-5
   weight_decay: 0.01
