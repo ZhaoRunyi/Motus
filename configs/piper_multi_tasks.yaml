@@ -98,7 +98,7 @@ model:
 training:
   global_batch_size: 256
   batch_size: 8 # 32 GPUs
-  max_steps: 40000
+  max_steps: 80000
   learning_rate: 5.0e-5
   weight_decay: 0.01
   scheduler_type: "linear"

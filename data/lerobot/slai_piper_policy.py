@@ -35,7 +35,7 @@ ROTATION_FORMAT_ALIASES = {
     "rot6d": "rot6d",
 }
 
-GRIPPER_FULL_WIDTH = 0.05
+GRIPPER_FULL_WIDTH = 0.10
 
 JOINT_NAMES = [
     "waist",

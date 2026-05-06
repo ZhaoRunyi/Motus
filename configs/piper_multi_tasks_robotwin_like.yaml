@@ -98,7 +98,7 @@ model:
 training:
   global_batch_size: 256
   batch_size: 8 # 32 GPUs
-  max_steps: 40000
+  max_steps: 80000
   learning_rate: 5.0e-5
   weight_decay: 0.01
   scheduler_type: "linear"
@@ -114,7 +114,7 @@ system:
   checkpoint_dir: "./checkpoints_piper"
   log_level: "INFO"
   log_interval: 1
-  save_interval: 5000
+  save_interval: 10000
   newest_save_interval: 2000
   val_interval: 5000
   num_workers: 16
