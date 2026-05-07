@@ -1,0 +1,133 @@
+common:
+  action_dim: 14
+  state_dim: 14
+  num_video_frames: 8
+  video_height: 384
+  video_width: 320
+  global_downsample_rate: 3
+  video_action_freq_ratio: 4
+
+dataset:
+  type: "lerobot"
+  max_episodes: null
+  image_aug: false
+  task_mode: "multi"
+  task_name:
+    - "Motus_Piper_beaker_mixer_0421"
+    - "Motus_Piper_carry_basket_0426"
+    - "Motus_Piper_click_bell_0403"
+    - "Motus_Piper_depress_pipette_0421"
+    - "Motus_Piper_dock_tubes_0421"
+    - "Motus_Piper_insert_test_tube_0430"
+    - "Motus_Piper_items_hand_over_place_0421"
+    - "Motus_Piper_open_drawer_0421"
+    - "Motus_Piper_open_pan_0421"
+    - "Motus_Piper_pour_dual_0427"
+    - "Motus_Piper_rearr_0421"
+
+  params:
+    repo_id: "piper_multi_tasks"
+    root: "/workspace/data/ZhaoRunyi"
+    embodiment_type: "piper_multi_tasks_dual_14d"
+    embodiment_types:
+      - "piper_beaker_mixer_0421_dual_14d"
+      - "piper_carry_basket_0426_dual_14d"
+      - "piper_click_bell_0403_dual_14d"
+      - "piper_depress_pipette_0421_dual_14d"
+      - "piper_dock_tubes_0421_dual_14d"
+      - "piper_insert_test_tube_0430_dual_14d"
+      - "piper_items_hand_over_place_0421_dual_14d"
+      - "piper_open_drawer_0421_dual_14d"
+      - "piper_open_pan_0421_dual_14d"
+      - "piper_pour_dual_0427_dual_14d"
+      - "piper_rearr_0421_dual_14d"
+    state_action_space: "joints"
+    state_action_arms: "dual"
+    enable_t5_fallback: false
+    t5_wan_path: "/workspace/ckpts"
+    t5_folder_name: "t5_embedding"
+    t5_text_len: 512
+    video_backend: "pyav"
+
+model:
+  wan:
+    config_path: "/workspace/ckpts/Wan2.2-TI2V-5B"
+    checkpoint_path: "/workspace/ckpts/Wan2.2-TI2V-5B"
+    vae_path: "/workspace/ckpts/Wan2.2-TI2V-5B/Wan2.2_VAE.pth"
+    precision: "bfloat16"
+
+  vlm:
+    checkpoint_path: "/workspace/ckpts/Qwen3-VL-2B-Instruct"
+    precision: "bfloat16"
+    frozen: true
+
+  action_expert:
+    hidden_size: 1024
+    ffn_dim_multiplier: 4
+    norm_eps: 1.0e-5
+
+  und_expert:
+    hidden_size: 512
+    ffn_dim_multiplier: 4
+    norm_eps: 1.0e-5
+    vlm:
+      input_dim: 2048
+      projector_type: "mlp3x_silu"
+
+  time_distribution:
+    timestep_sample_method: "logit_normal"
+    sigmoid_scale: 1.0
+    min_t: 0.0
+    max_t: 1.0
+
+  inference:
+    num_inference_timesteps: 10
+
+  loss_weights:
+    video_loss_weight: 1.0
+    action_loss_weight: 1.0
+
+  ema:
+    enabled: false
+    update_after_step: 0
+    inv_gamma: 1.0
+    power: 0.75
+    min_value: 0.0
+    max_value: 0.9999
+
+training:
+  global_batch_size: 256
+  batch_size: 8 # 32 GPUs
+  max_steps: 80000
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  scheduler_type: "linear"
+  warmup_steps: 200
+  cycle_length: 40000
+  f_max: 0.99
+  f_min: 0.4
+  grad_clip_norm: 0.5
+  use_amp: true
+  find_unused_parameters: false
+
+system:
+  checkpoint_dir: "./checkpoints_piper"
+  log_level: "INFO"
+  log_interval: 1
+  save_interval: 10000
+  newest_save_interval: 2000
+  val_interval: 5000
+  num_workers: 16
+  pin_memory: true
+
+logging:
+  report_to: "wandb"
+  wandb_project: "motus-piper"
+  tensorboard_log_dir: "tensorboard_logs"
+  run_name: "piper_multi_tasks_a3v4_14d"
+
+resume:
+  checkpoint_path: null
+
+finetune:
+  checkpoint_path: "/workspace/ckpts/Motus"

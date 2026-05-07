@@ -28,7 +28,7 @@ except Exception:  # pragma: no cover
 
 from utils.vlm_utils import preprocess_vlm_messages
 
-from data.lerobot.slai_piper_policy import StateSpaceConfig, get_space_dim, select_state_action_vector
+from data.lerobot.slai_piper_policy import GripperConfig, StateSpaceConfig, get_space_dim, select_state_action_vector
 from data.utils.image_utils import resize_with_padding, tensor_to_pil
 from data.utils.norm import normalize_actions, load_normalization_stats
 
@@ -190,6 +190,8 @@ class LeRobotMotusDataset(data.Dataset):
         embodiment_types: Optional[List[str]] = None,
         state_action_space: Optional[str] = None,
         state_action_arms: str = "dual",
+        gripper_type: str = "raw",
+        gripper_threshold: Optional[float] = None,
         task_mode: str = "single", # "single" or "multi"
         task_name: str = "null",
         **kwargs
@@ -226,8 +228,13 @@ class LeRobotMotusDataset(data.Dataset):
         self.image_aug = image_aug # No extra augmentation on LeRobot side for now
         self.task_mode = task_mode
         self.task_name = task_name
+        stat_path = Path(__file__).parent.parent / "utils" / "stat.json"
+        if gripper_type == "01" and gripper_threshold is None:
+            stats = json.loads(stat_path.read_text(encoding="utf-8"))
+            entry = stats.get(embodiment_type) or next((stats[str(name)] for name in embodiment_types or [] if str(name) in stats), {})
+            gripper_threshold = entry.get("gripper_threshold", 0.01)
         self.state_action_config = (
-            StateSpaceConfig(ids=state_action_space, arms=state_action_arms)
+            StateSpaceConfig(ids=state_action_space, arms=state_action_arms, gripper=GripperConfig(type=gripper_type, threshold=float(gripper_threshold or 0.01)))
             if state_action_space is not None
             else None
         )
