@@ -10432,6 +10432,19 @@
                 "Motus_Piper_pour_dual_0427": 0.7050000429153442,
                 "Motus_Piper_rearr_0421": 0.08098180592060089
             },
+            "prompt": {
+                "Motus_Piper_beaker_mixer_0421": "Pick the beaker, place it on the mixer, then flip the toggle switch with the other arm.",
+                "Motus_Piper_carry_basket_0426": "Pick the bottle then place it to the basket, carry the basket with the other arm.",
+                "Motus_Piper_click_bell_0403": "Click the bell",
+                "Motus_Piper_depress_pipette_0421": "Pick the pipette and move it to the center-top of the beaker, use the other arm to depress the plunger.",
+                "Motus_Piper_dock_tubes_0421": "Pick up two centrifuge tubes from the table and dock them horizontally.",
+                "Motus_Piper_insert_test_tube_0430": "Pick up the test tube, and it to the other arm, and insert it to the rack.",
+                "Motus_Piper_items_hand_over_place_0421": "Pick up the pen, hand it over to the other arm and then place it in to the pen holder",
+                "Motus_Piper_open_drawer_0421": "Open the drawer, pick the tomato with another arm then place it in the drawer.",
+                "Motus_Piper_open_pan_0421": "Grab the knod on the pan lid, lift it to open the pan, then pick the carrot with the other arm, place it in the pan, then move the lid back to the pan to close it.",
+                "Motus_Piper_pour_dual_0427": "Pick the cup and the bottle with the other arm, pour the water from bottle to cup",
+                "Motus_Piper_rearr_0421": "Pick the fork and the spoon, place them next to the plate."
+            },
             "global_raw_ratio": 0.7990000247955322,
             "plot": "logs/gripper_threshold/multi_task_grippers.png"
         }

@@ -14,9 +14,9 @@ def roots_for(data: Path, tasks: list[str]) -> list[Path]:
     roots = [data / task for task in tasks if (data / task / "meta/info.json").exists()]
     return roots or sorted(path.parent.parent for path in data.glob("*/meta/info.json"))
 
-def episodes(root: Path) -> list[int]:
+def episode_rows(root: Path) -> list[dict]:
     lines = (root / "meta/episodes.jsonl").read_text().splitlines()
-    return [json.loads(line)["episode_index"] for line in lines if line.strip()]
+    return [json.loads(line) for line in lines if line.strip()]
 
 def parquet_path(root: Path, episode: int) -> Path:
     info = json.loads((root / "meta/info.json").read_text())
@@ -76,10 +76,12 @@ def main() -> None:
         parser.add_argument(f"--{name}", type=float, default=default)
     args = parser.parse_args()
     tasks = [str(name) for name in yaml.safe_load(args.config.read_text())["dataset"]["task_name"]]
-    task_data, episode_values, task_values = {}, {}, {}
+    task_data, episode_values, task_values, task_prompts = {}, {}, {}, {}
     for dataset in roots_for(args.data, tasks):
-        task_data[dataset.name], episode_values[dataset.name] = [], {}
-        for episode in episodes(dataset):
+        task_data[dataset.name], episode_values[dataset.name], task_prompts[dataset.name] = [], {}, ""
+        for row in episode_rows(dataset):
+            episode = row["episode_index"]
+            if not task_prompts[dataset.name] and row.get("tasks"): task_prompts[dataset.name] = row["tasks"][0]
             grips = read_grippers(dataset, episode)
             vals = [grasp_value(grips[source][arm], args.skip_frac, args.window_frac, args.min_diff) for source in ("state", "action") for arm in ARMS]
             vals = [value for value in vals if value is not None]
@@ -89,12 +91,10 @@ def main() -> None:
         task_values[dataset.name] = max(valid) if valid else None
     global_raw = max(value for value in task_values.values() if value is not None)
     plot_curves(task_data, task_values, args.plot)
-    stats = json.loads(args.stat_json.read_text())
-    entry = stats.setdefault(args.target_stat, {})
+    stats = json.loads(args.stat_json.read_text()); entry = stats.setdefault(args.target_stat, {})
     entry["gripper_threshold"] = global_raw * args.full_width
-    entry["gripper_grasp_values"] = {"episode": episode_values, "task": task_values, "global_raw_ratio": global_raw, "plot": str(args.plot)}
+    entry["gripper_grasp_values"] = {"episode": episode_values, "task": task_values, "prompt": task_prompts, "global_raw_ratio": global_raw, "plot": str(args.plot)}
     args.stat_json.write_text(json.dumps(stats, indent=4, ensure_ascii=False) + "\n")
     print(f"threshold={entry['gripper_threshold']:.6f} raw_ratio={global_raw:.6f} plot={args.plot}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

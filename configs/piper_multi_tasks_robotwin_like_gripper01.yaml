@@ -34,6 +34,7 @@ dataset:
     state_action_space: "joints"
     state_action_arms: "dual"
     gripper_type: "01"
+    per_task_gripper_01: true
     enable_t5_fallback: false
     t5_wan_path: "/workspace/ckpts"
     t5_folder_name: "t5_embedding"

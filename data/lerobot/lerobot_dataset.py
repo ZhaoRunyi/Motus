@@ -5,6 +5,7 @@ This file provides a thin wrapper around `lerobot.common.datasets.lerobot_datase
 to match Motus' unified dataset interface (aligned with `Motus/data/dataset.py::collate_fn`).
 """
 
+import dataclasses
 import io
 import os
 import random
@@ -192,6 +193,7 @@ class LeRobotMotusDataset(data.Dataset):
         state_action_arms: str = "dual",
         gripper_type: str = "raw",
         gripper_threshold: Optional[float] = None,
+        per_task_gripper_01: bool = False,
         task_mode: str = "single", # "single" or "multi"
         task_name: str = "null",
         **kwargs
@@ -229,10 +231,16 @@ class LeRobotMotusDataset(data.Dataset):
         self.task_mode = task_mode
         self.task_name = task_name
         stat_path = Path(__file__).parent.parent / "utils" / "stat.json"
-        if gripper_type == "01" and gripper_threshold is None:
+        self.per_task_gripper_thresholds = {}
+        if gripper_type == "01" and (gripper_threshold is None or per_task_gripper_01):
             stats = json.loads(stat_path.read_text(encoding="utf-8"))
             entry = stats.get(embodiment_type) or next((stats[str(name)] for name in embodiment_types or [] if str(name) in stats), {})
-            gripper_threshold = entry.get("gripper_threshold", 0.01)
+            if gripper_threshold is None:
+                gripper_threshold = entry.get("gripper_threshold", 0.01)
+            if per_task_gripper_01:
+                for task_name, value in entry.get("gripper_grasp_values", {}).get("task", {}).items():
+                    if value is not None:
+                        self.per_task_gripper_thresholds[str(task_name)] = float(value) * float(entry.get("gripper_full_width", 0.10))
         self.state_action_config = (
             StateSpaceConfig(ids=state_action_space, arms=state_action_arms, gripper=GripperConfig(type=gripper_type, threshold=float(gripper_threshold or 0.01)))
             if state_action_space is not None
@@ -916,9 +924,15 @@ class LeRobotMotusDataset(data.Dataset):
             action_sequence = torch.from_numpy(np.stack(action_values, axis=0)).float()
         else:
             action_sequence = torch.tensor(action_values, dtype=torch.float32)
-        if self.state_action_config is not None:
-            initial_state = select_state_action_vector(initial_state, self.state_action_config)
-            action_sequence = select_state_action_vector(action_sequence, self.state_action_config)
+        state_action_config = self.state_action_config
+        if state_action_config is not None and self.per_task_gripper_thresholds and self.task_mode == "multi":
+            task_threshold = self.per_task_gripper_thresholds.get(self.repo_ids[task_idx])
+            if task_threshold is not None:
+                gripper_config = dataclasses.replace(state_action_config.gripper, threshold=task_threshold)
+                state_action_config = dataclasses.replace(state_action_config, gripper=gripper_config)
+        if state_action_config is not None:
+            initial_state = select_state_action_vector(initial_state, state_action_config)
+            action_sequence = select_state_action_vector(action_sequence, state_action_config)
         
         # Language embedding:
         # 1) Prefer parquet (legacy: each frame has `language_embedding`)
