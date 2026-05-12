@@ -172,6 +172,7 @@ class MotusRemotePolicy:
         wan_path: str | None,
         default_prompt: str | None,
         t5_embeds: str | None,
+        num_inference_timesteps: int | None,
         device: str,
     ) -> None:
         self._device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -192,7 +193,7 @@ class MotusRemotePolicy:
         self._action_dim = int(self._config_dict["common"]["action_dim"])
         self._video_height = int(self._config_dict["common"]["video_height"])
         self._video_width = int(self._config_dict["common"]["video_width"])
-        self._num_inference_steps = int(self._config_dict["model"]["inference"]["num_inference_timesteps"])
+        self._num_inference_steps = int(num_inference_timesteps if num_inference_timesteps is not None else self._config_dict["model"]["inference"]["num_inference_timesteps"])
         self._action_chunk_size = (
             int(self._config_dict["common"]["num_video_frames"])
             * int(self._config_dict["common"]["video_action_freq_ratio"])
@@ -262,6 +263,7 @@ class MotusRemotePolicy:
         session_id = str(obs.get("session_id") or "default")
         first_frame, first_frame_pil = self._extract_image(obs)
         state = self._extract_state(obs)
+        num_inference_steps = int(obs.get("num_inference_timesteps", self._num_inference_steps))
         language_embeddings = self._resolve_language_embeddings(obs, prompt)
         vlm_inputs = build_vlm_inputs(self._processor, prompt, first_frame_pil, self._device)
 
@@ -269,7 +271,7 @@ class MotusRemotePolicy:
             predicted_frames, predicted_actions = self._model.inference_step(
                 first_frame=first_frame,
                 state=state,
-                num_inference_steps=self._num_inference_steps,
+                num_inference_steps=num_inference_steps,
                 language_embeddings=language_embeddings,
                 vlm_inputs=[vlm_inputs],
             )
@@ -510,6 +512,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wan_path", default=None, help="Base pretrained model directory for WAN T5 loading")
     parser.add_argument("--default_prompt", default=None, help="Default instruction text when the client omits prompt")
     parser.add_argument("--t5_embeds", default=None, help="Path to a pre-encoded T5 embedding .pt file")
+    parser.add_argument("--num-inference-timesteps", type=int, default=None, help="Override model.inference.num_inference_timesteps")
     return parser.parse_args()
 
 
@@ -521,6 +524,7 @@ def main() -> None:
         wan_path=args.wan_path,
         default_prompt=args.default_prompt,
         t5_embeds=args.t5_embeds,
+        num_inference_timesteps=args.num_inference_timesteps,
         device=args.device,
     )
     logger.info("Starting Motus websocket server on %s:%s", args.host, args.port)
