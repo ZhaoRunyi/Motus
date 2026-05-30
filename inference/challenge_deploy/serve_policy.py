@@ -248,6 +248,10 @@ class MotusRemotePolicy:
         self.metadata = {
             "model": "Motus",
             "device": str(self._device),
+            "model_config": str(Path(model_config).expanduser().resolve(strict=False)),
+            "ckpt_dir": str(Path(ckpt_dir).expanduser().resolve(strict=False)),
+            "checkpoint_dir": str(Path(ckpt_dir).expanduser().resolve(strict=False)),
+            "model_path": str(Path(ckpt_dir).expanduser().resolve(strict=False)),
             "default_prompt": self._default_prompt,
             "prompt_mode": prompt_mode,
             "prompt_t5_cache_dir": str(self._prompt_t5_cache_dir),

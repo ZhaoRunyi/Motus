@@ -47,7 +47,7 @@ class PrepareMotusLeRobotDatasetsTest(unittest.TestCase):
 
             info = {
                 "codebase_version": "v2.1",
-                "robot_type": "aloha",
+                "robot_type": "slai_piper",
                 "total_episodes": 2,
                 "total_frames": 6,
                 "total_tasks": 1,
@@ -192,7 +192,7 @@ class PrepareMotusLeRobotDatasetsTest(unittest.TestCase):
 
             info = {
                 "codebase_version": "v2.1",
-                "robot_type": "aloha",
+                "robot_type": "slai_piper",
                 "total_episodes": 2,
                 "total_frames": 6,
                 "total_tasks": 1,
